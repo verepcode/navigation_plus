@@ -204,12 +204,25 @@ class RouteElevationAnalyzer:
         # Grid layout oluştur
         gs = fig.add_gridspec(3, 2, height_ratios=[2, 1, 1], hspace=0.3, wspace=0.3)
         
-        # 1. HAİTA - Rota görünümü (üstte, geniş)
-        ax_map = fig.add_subplot(gs[0, :])
-        
+        # Eğim hesaplama (harita için)
         lats = [coord[0] for coord in results['coordinates']]
         lngs = [coord[1] for coord in results['coordinates']]
         elevations = results['elevations']
+        
+        gradients_map = [0]  # İlk nokta için eğim 0
+        for i in range(1, len(results['elevations'])):
+            if results['distances'][i] != results['distances'][i-1]:
+                gradient = (results['elevations'][i] - results['elevations'][i-1]) / \
+                          ((results['distances'][i] - results['distances'][i-1]) * 1000) * 100
+                gradients_map.append(gradient)
+            else:
+                gradients_map.append(0)
+        
+        # %20'yi aşan eğim noktalarını tespit et
+        steep_indices = [i for i, g in enumerate(gradients_map) if abs(g) > 20]
+        
+        # 1. HAİTA - Rota görünümü (üstte, geniş)
+        ax_map = fig.add_subplot(gs[0, :])
         
         # Yüksekliğe göre renklendirme
         scatter = ax_map.scatter(lngs, lats, c=elevations, cmap='terrain', 
@@ -217,6 +230,25 @@ class RouteElevationAnalyzer:
         
         # Rota çizgisini çiz
         ax_map.plot(lngs, lats, 'b-', linewidth=2, alpha=0.7, label='Rota')
+        
+        # %20'yi aşan dik eğim bölgelerini vurgula
+        if steep_indices:
+            steep_lats = [lats[i] for i in steep_indices]
+            steep_lngs = [lngs[i] for i in steep_indices]
+            steep_grads = [gradients_map[i] for i in steep_indices]
+            
+            ax_map.scatter(steep_lngs, steep_lats, c='red', s=200, 
+                          marker='X', edgecolors='darkred', linewidth=2,
+                          label='Dik Eğim (>%20)', zorder=5)
+            
+            # Her dik eğim noktasını etiketle
+            for i, idx in enumerate(steep_indices):
+                ax_map.annotate(f'{abs(gradients_map[idx]):.1f}%', 
+                              (steep_lngs[i], steep_lats[i]),
+                              xytext=(10, 10), textcoords='offset points',
+                              bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.8),
+                              fontsize=9, fontweight='bold',
+                              arrowprops=dict(arrowstyle='->', color='red', lw=2))
         
         # Başlangıç ve bitiş noktaları
         ax_map.plot(lngs[0], lats[0], 'go', markersize=15, label='Başlangıç: Maltepe', 
