@@ -1,0 +1,17 @@
+# Rota Analizi ve Yakıt Tüketimi Hesaplama Sistemi
+# Gerekli Python paketleri
+
+# API çağrıları için
+requests>=2.31.0
+
+# Sayısal hesaplamalar için
+numpy>=1.24.0
+
+# Grafik ve görselleştirme için
+matplotlib>=3.7.0
+
+# Opsiyonel: Gelişmiş veri analizi için
+pandas>=2.0.0
+
+# Opsiyonel: JSON işleme (Python ile birlikte gelir)
+# json (built-in)
