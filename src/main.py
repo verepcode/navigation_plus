@@ -4,7 +4,8 @@ Bu program veritabanı, hesaplama ve görselleştirme modüllerini kullanır.
 """
 
 from datetime import datetime
-from database import VEHICLE_DATABASE, get_all_vehicles
+from database import (VEHICLE_DATABASE, get_all_vehicles, 
+                     FUEL_PRICES, PEAK_HOURS, is_peak_hour)
 from visualization import RouteElevationAnalyzer
 
 
@@ -12,9 +13,14 @@ def print_welcome_message():
     """Karşılama mesajı yazdır"""
     print("="*80)
     print("NAVİGASYON ASISTANI - YAKIT TÜKETİMİ VE ROTA ANALİZİ")
+    print("İstanbul Detaylı Trafik Veritabanı")
     print("="*80)
     print(f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-    print("Modüler yapı ile çalışan versiyon")
+    print("Modüler yapı ile çalışan versiyon 2.0")
+    print("-"*80)
+    print("📊 GÜNCEL YAKIT FİYATLARI:")
+    for fuel_type, price in FUEL_PRICES.items():
+        print(f"   {fuel_type}: {price:.2f} TL/Litre")
     print("-"*80)
 
 
@@ -53,9 +59,9 @@ def get_best_vehicles(vehicle_comparison):
     print(f"   └─ {best_cost[1]['specs']['fuel_type']} yakıt")
     
     # En kolay sürüş
-    difficulty_order = {'KOLAY': 0, 'ORTA': 1, 'ZOR': 2, 'ÇOK ZOR': 3}
+    difficulty_order = {'KOLAY': 0, 'ORTA': 1, 'ZOR': 2}
     easiest = min(vehicle_comparison.items(), 
-                key=lambda x: difficulty_order[x[1]['capability']['difficulty']])
+                key=lambda x: difficulty_order.get(x[1]['capability']['difficulty'], 2))
     print(f"\n🎯 EN KOLAY SÜRÜŞ:")
     print(f"   {easiest[0]}")
     print(f"   └─ Zorluk: {easiest[1]['capability']['difficulty']}")
@@ -105,15 +111,23 @@ def main():
         print("❌ Rota analizi başarısız! Program sonlandırılıyor.")
         return
     
+    # Google Maps'ten gelen orijinal rota bilgisini sakla (API çağrısından)
+    route_info = results  # Analiz sonuçları route_info olarak kullanılabilir
+    
     # Mevcut araçları listele
     vehicles = list_available_vehicles()
     
     # Örnek araç seç
     example_vehicle = "Fiat Egea 1.3 Multijet"
-    time_of_day = 'peak'  # 'peak' veya 'offpeak'
+    
+    # Otomatik olarak peak/offpeak belirle
+    current_hour = datetime.now().hour
+    time_of_day = 'peak' if is_peak_hour(current_hour) else 'offpeak'
+    time_description = 'YOĞUN SAAT (07:00-10:00, 17:00-20:00)' if time_of_day == 'peak' else 'SEYREK SAAT'
     
     print(f"\n🚗 SEÇİLEN ARAÇ: {example_vehicle}")
-    print(f"⏰ ZAMAN DİLİMİ: {'Yoğun Saat (06-10, 17-21)' if time_of_day == 'peak' else 'Seyrek Saat'}")
+    print(f"⏰ ŞU ANKİ SAAT: {datetime.now().strftime('%H:%M')}")
+    print(f"📊 TRAFİK DURUMU: {time_description}")
     print("-"*80)
     
     # Detaylı rapor
@@ -129,12 +143,13 @@ def main():
         time_of_day,
         save_path='rota_analizi.png',
         origin_name=origin.split(',')[0],  # Sadece sokak adı
-        destination_name=destination.split(',')[0]  # Sadece yer adı
+        destination_name=destination.split(',')[0],  # Sadece yer adı
+        route_info=route_info
     )
     
     # Tüm araçları karşılaştır
     print("\n🔄 TÜM ARAÇLAR KARŞILAŞTIRILIYOR...")
-    vehicle_comparison = analyzer.compare_vehicles(results, time_of_day)
+    vehicle_comparison = analyzer.compare_vehicles(results, time_of_day, route_info=route_info)
     
     # En iyi araçları öner
     get_best_vehicles(vehicle_comparison)

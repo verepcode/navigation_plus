@@ -263,7 +263,7 @@ class RouteElevationAnalyzer:
         return results
     
     def visualize_route_with_fuel(self, results, vehicle_name, time_of_day='peak', 
-                                 save_path='rota_analizi.png', origin_name='', destination_name=''):
+                                 save_path='rota_analizi.png', origin_name='', destination_name='', route_info=None):
         """
         Rota, yükseklik profili ve yakıt tüketimi grafiklerini oluştur
         
@@ -274,6 +274,7 @@ class RouteElevationAnalyzer:
             save_path (str): Grafik kayıt yolu
             origin_name (str): Başlangıç noktası adı
             destination_name (str): Bitiş noktası adı
+            route_info (dict): Google Maps rota bilgisi
         """
         vehicle_specs = get_vehicle_specs(vehicle_name)
         if not vehicle_specs:
@@ -281,7 +282,7 @@ class RouteElevationAnalyzer:
             return
         
         # Yakıt hesaplamaları
-        fuel_data = self.fuel_calculator.calculate_fuel_consumption(vehicle_specs, results, time_of_day)
+        fuel_data = self.fuel_calculator.calculate_fuel_consumption(vehicle_specs, results, time_of_day, route_info)
         capability = self.fuel_calculator.assess_vehicle_capability(vehicle_specs, results)
         
         # Grafik oluştur - Enhanced layout
@@ -441,14 +442,18 @@ class RouteElevationAnalyzer:
         ax_fuel.axis('off')
         
         fuel_info = f"""
-        🚗 {vehicle_name} | {vehicle_specs['hp']}HP {vehicle_specs['torque_nm']}Nm | {vehicle_specs['fuel_type']}
-        ⛽ {fuel_data['total_fuel_liters']:.3f}L | {fuel_data['fuel_per_100km']:.2f}L/100km | {fuel_data['fuel_cost_tl']:.2f}TL
+        {vehicle_name} | {vehicle_specs['hp']}HP {vehicle_specs['torque_nm']}Nm | {vehicle_specs['fuel_type']}
+        {fuel_data['total_fuel_liters']:.3f}L | {fuel_data['fuel_per_100km']:.2f}L/100km | Yakıt: {fuel_data['fuel_cost_tl']:.2f}TL
         """
         
+        # Geçiş ücretleri varsa göster
+        if fuel_data.get('toll_cost_tl', 0) > 0:
+            fuel_info += f"\n Geçiş Ücreti: {fuel_data['toll_cost_tl']:.2f}TL | Toplam Maliyet: {fuel_data['total_cost_tl']:.2f}TL"
+        
         if capability['warnings']:
-            fuel_info += f"\n⚠️ {' | '.join(capability['warnings'][:2])}"
+            fuel_info += f"\n {' | '.join(capability['warnings'][:2])}"
         else:
-            fuel_info += "\n✅ Araç bu rota için uygun"
+            fuel_info += "\n Araç bu rota için uygun"
         
         ax_fuel.text(0.5, 0.5, fuel_info, fontsize=10, family='monospace',
                     bbox=dict(boxstyle='round', facecolor='lightyellow', 
@@ -459,7 +464,7 @@ class RouteElevationAnalyzer:
         print(f"\nGrafik kaydedildi: {save_path}")
         plt.show()
     
-    def compare_vehicles(self, results, time_of_day='peak', save_path='arac_karsilastirma.png'):
+    def compare_vehicles(self, results, time_of_day='peak', save_path='arac_karsilastirma.png', route_info=None):
         """
         Tüm araçlar için yakıt tüketimi karşılaştırması
         
@@ -467,6 +472,7 @@ class RouteElevationAnalyzer:
             results (dict): Rota analizi sonuçları
             time_of_day (str): 'peak' veya 'offpeak'
             save_path (str): Grafik kayıt yolu
+            route_info (dict): Google Maps rota bilgisi
             
         Returns:
             dict: Araç karşılaştırma sonuçları
@@ -474,7 +480,7 @@ class RouteElevationAnalyzer:
         vehicle_results = {}
         
         for vehicle_name, specs in VEHICLE_DATABASE.items():
-            fuel_data = self.fuel_calculator.calculate_fuel_consumption(specs, results, time_of_day)            
+            fuel_data = self.fuel_calculator.calculate_fuel_consumption(specs, results, time_of_day, route_info)            
             capability = self.fuel_calculator.assess_vehicle_capability(specs, results)
             
             vehicle_results[vehicle_name] = {
@@ -527,17 +533,16 @@ class RouteElevationAnalyzer:
             ax3.text(v + 2, i, f'{v:.2f}₺', va='center', fontweight='bold')
         
         # 4. Zorluk skorları
-        difficulty_map = {'KOLAY': 1, 'ORTA': 2, 'ZOR': 3, 'ÇOK ZOR': 4}
-        difficulties = [difficulty_map[vehicle_results[v]['capability']['difficulty']] for v in vehicles]
+        difficulty_map = {'KOLAY': 1, 'ORTA': 2, 'ZOR': 3}
+        difficulties = [difficulty_map.get(vehicle_results[v]['capability']['difficulty'], 3) for v in vehicles]
         difficulty_labels = [vehicle_results[v]['capability']['difficulty'] for v in vehicles]
-        colors4 = ['green' if d == 1 else 'yellow' if d == 2 else 'orange' if d == 3 else 'red' 
-                  for d in difficulties]
+        colors4 = ['green' if d == 1 else 'yellow' if d == 2 else 'red' for d in difficulties]
         
         ax4.barh(vehicles, difficulties, color=colors4, alpha=0.7, edgecolor='black', linewidth=1.5)
         ax4.set_xlabel('Zorluk Seviyesi', fontweight='bold')
         ax4.set_title('Rota Zorluk Değerlendirmesi', fontweight='bold')
-        ax4.set_xticks([1, 2, 3, 4])
-        ax4.set_xticklabels(['KOLAY', 'ORTA', 'ZOR', 'ÇOK ZOR'])
+        ax4.set_xticks([1, 2, 3])
+        ax4.set_xticklabels(['KOLAY', 'ORTA', 'ZOR'])
         ax4.grid(axis='x', alpha=0.3)
         
         for i, label in enumerate(difficulty_labels):
@@ -598,7 +603,7 @@ class RouteElevationAnalyzer:
         
         # Kritik eğim bölgeleri
         if steep_sections:
-            print("\n⚠️ KRİTİK EĞİM BÖLGELERİ (%20'nin Üzeri)")
+            print("\n KRİTİK EĞİM BÖLGELERİ (%20'nin Üzeri)")
             print("="*80)
             
             for idx, section in enumerate(steep_sections, 1):
@@ -621,35 +626,35 @@ class RouteElevationAnalyzer:
                 fuel_data = self.fuel_calculator.calculate_fuel_consumption(specs, results, time_of_day)
                 capability = self.fuel_calculator.assess_vehicle_capability(specs, results)
                 
-                print(f"\n📋 Araç Özellikleri:")
+                print(f"\n Araç Özellikleri:")
                 print(f"Motor Gücü: {specs['hp']} HP")
                 print(f"Tork: {specs['torque_nm']} Nm")
                 print(f"Ağırlık: {specs['weight_kg']} kg")
                 print(f"Motor Hacmi: {specs['engine_cc']} cc")
                 print(f"Yakıt Tipi: {specs['fuel_type']}")
                 
-                print(f"\n⛽ Yakıt Tahmini ({time_of_day.upper()} saatleri):")
+                print(f"\n Yakıt Tahmini ({time_of_day.upper()} saatleri):")
                 print(f"Toplam Tüketim: {fuel_data['total_fuel_liters']:.3f} Litre")
                 print(f"100km Başına: {fuel_data['fuel_per_100km']:.2f} L/100km")
                 print(f"Tahmini Maliyet: {fuel_data['fuel_cost_tl']:.2f} TL")
                 
-                print(f"\n📊 Segment Bazlı Analiz:")
+                print(f"\n Segment Bazlı Analiz:")
                 for zone, data in fuel_data['segment_stats'].items():
                     if data['distance'] > 0:
                         zone_info = TRAFFIC_ZONES[zone]
                         avg_speed = zone_info['avg_speed_peak'] if time_of_day == 'peak' else zone_info['avg_speed_offpeak']
                         print(f"  {zone}: {data['distance']:.2f}km | Ort. Hız: {avg_speed}km/h | Yakıt: {data['fuel']:.3f}L")
                 
-                print(f"\n🎯 Performans Analizi:")
+                print(f"\n Performans Analizi:")
                 print(f"Güç/Ağırlık: {capability['power_to_weight']:.3f} HP/kg")
                 print(f"Tork/Ağırlık: {capability['torque_to_weight']:.3f} Nm/kg")
                 print(f"Rota Zorluğu: {capability['difficulty']}")
                 
                 if capability['warnings']:
-                    print(f"\n⚠️ Uyarılar:")
+                    print(f"\n Uyarılar:")
                     for warning in capability['warnings']:
                         print(f"  {warning}")
                 else:
-                    print("\n✅ Bu rota için araç performansı yeterli.")
+                    print("\n Bu rota için araç performansı yeterli.")
         
         print("\n" + "="*80)

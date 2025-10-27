@@ -115,38 +115,221 @@ VEHICLE_DATABASE = {
     }
 }
 
-# İstanbul'daki yoğun yollar ve trafik karakteristikleri
+# İstanbul'daki yollar ve trafik karakteristikleri - Gerçekçi ve Detaylı
 TRAFFIC_ZONES = {
-    'E5': {
-        'avg_speed_peak': 25,      # Yoğun saatlerde ortalama hız (km/h)
-        'avg_speed_offpeak': 60,   # Seyrek saatlerde
-        'traffic_multiplier': 1.8,  # Trafik tüketim çarpanı
-        'keywords': ['E5', 'TEM', 'Otoyol', 'D100']
+    # DEVLET OTOYOLLARI
+    'O-1_O-2_Otoyol': {
+        'name': 'O-1_O-2_Otoyol',
+        'avg_speed_peak': 50,      # Yoğun saatlerde ortalama hız (km/h)
+        'avg_speed_offpeak': 95,   # Seyrek saatlerde
+        'traffic_multiplier': 1.2,  # Trafik tüketim çarpanı
+        'toll': False,              # Ücretli değil (devlet yolu)
+        'road_type': 'Otoyol',
+        'keywords': ['TEM', 'O-1', 'O-2', 'Trans Avrupa', 'Mahmutbey', 'Habipler']
     },
-    'Anadolu': {
-        'avg_speed_peak': 30,
-        'avg_speed_offpeak': 50,
-        'traffic_multiplier': 1.6,
-        'keywords': ['Bağdat', 'Anadolu', 'Kadıköy', 'Maltepe', 'Kartal']
+    
+    'D100_E5': {
+        'name': 'D100_E5',
+        'avg_speed_peak': 25,      
+        'avg_speed_offpeak': 60,   
+        'traffic_multiplier': 1.8,  
+        'toll': False,
+        'road_type': 'Ana Arter',
+        'keywords': ['E5', 'D100', 'Londra Asfaltı', 'Bakırköy', 'Avcılar', 'Beylikdüzü']
     },
-    'Suburban': {
-        'avg_speed_peak': 40,
-        'avg_speed_offpeak': 70,
-        'traffic_multiplier': 1.3,
-        'keywords': ['Aydos', 'Orman', 'Sultanbeyli', 'Sancaktepe']
+    
+    # ÖZEL OTOYOLLAR (Ücretli)
+    'Avrasya_Tuneli': {
+        'name': 'Avrasya_Tuneli',
+        'avg_speed_peak': 60,      
+        'avg_speed_offpeak': 70,   
+        'traffic_multiplier': 1.1,  
+        'toll': True,
+        'toll_price': 145,          # TL (2024 tarifesi)
+        'road_type': 'Tünel',
+        'keywords': ['Avrasya', 'Tünel', 'Kazlıçeşme', 'Göztepe']
     },
-    'Highway': {
-        'avg_speed_peak': 80,
-        'avg_speed_offpeak': 100,
-        'traffic_multiplier': 1.0,
-        'keywords': ['Otoyol', 'Çevre']
+    
+    '15_Temmuz_Kopru': {
+        'name': '15_Temmuz_Kopru',
+        'avg_speed_peak': 35,      
+        'avg_speed_offpeak': 70,   
+        'traffic_multiplier': 1.5,  
+        'toll': True,
+        'toll_price': 52,           
+        'road_type': 'Köprü',
+        'keywords': ['15 Temmuz', 'Boğaziçi', 'Birinci Köprü', 'Ortaköy', 'Beylerbeyi']
+    },
+    
+    'FSM_Kopru': {
+        'name': 'FSM_Kopru',
+        'avg_speed_peak': 40,      
+        'avg_speed_offpeak': 75,   
+        'traffic_multiplier': 1.4,  
+        'toll': True,
+        'toll_price': 52,           
+        'road_type': 'Köprü',
+        'keywords': ['FSM', 'Fatih Sultan', 'İkinci Köprü', 'Kavacık', 'Hisarüstü']
+    },
+    
+    'YSS_Kopru': {
+        'name': 'YSS_Kopru',
+        'avg_speed_peak': 70,      
+        'avg_speed_offpeak': 100,  
+        'traffic_multiplier': 1.1,  
+        'toll': True,
+        'toll_price': 94,           
+        'road_type': 'Köprü',
+        'keywords': ['YSS', 'Yavuz Sultan', 'Üçüncü Köprü', 'Kuzey Marmara']
+    },
+    
+    'Kuzey_Marmara_Otoyolu': {
+        'name': 'Kuzey_Marmara_Otoyolu',
+        'avg_speed_peak': 80,      
+        'avg_speed_offpeak': 110,  
+        'traffic_multiplier': 1.0,  
+        'toll': True,
+        'toll_per_km': 0.48,        # TL/km
+        'road_type': 'Otoyol',
+        'keywords': ['Kuzey Marmara', 'O-7', 'Odayeri', 'Başakşehir', 'Kurtköy']
+    },
+    
+    # ANA ARTERLER VE CADDELER
+    'Bagdat_Caddesi': {
+        'name': 'Bağdat Caddesi',
+        'avg_speed_peak': 20,      
+        'avg_speed_offpeak': 45,   
+        'traffic_multiplier': 2.0,  
+        'toll': False,
+        'road_type': 'Cadde',
+        'keywords': ['Bağdat', 'Kadıköy', 'Bostancı', 'Suadiye', 'Caddebostan']
+    },
+    
+    'Barbaros_Bulvari': {
+        'name': 'Barbaros Bulvarı',
+        'avg_speed_peak': 25,      
+        'avg_speed_offpeak': 50,   
+        'traffic_multiplier': 1.7,  
+        'toll': False,
+        'road_type': 'Bulvar',
+        'keywords': ['Barbaros', 'Beşiktaş', 'Zincirlikuyu', 'Levent', '4.Levent']
+    },
+    
+    'Sahil_Yolu_Avrupa': {
+        'name': 'Avrupa Yakası Sahil Yolu',
+        'avg_speed_peak': 30,      
+        'avg_speed_offpeak': 55,   
+        'traffic_multiplier': 1.6,  
+        'toll': False,
+        'road_type': 'Sahil Yolu',
+        'keywords': ['Sahil', 'Florya', 'Yeşilköy', 'Bakırköy', 'Ataköy']
+    },
+    
+    'Sahil_Yolu_Anadolu': {
+        'name': 'Sahil_Yolu_Anadolu',
+        'avg_speed_peak': 35,      
+        'avg_speed_offpeak': 60,   
+        'traffic_multiplier': 1.5,  
+        'toll': False,
+        'road_type': 'Sahil Yolu',
+        'keywords': ['Sahil', 'Kadıköy', 'Maltepe', 'Kartal', 'Pendik', 'Tuzla']
+    },
+    
+    # BAĞLANTI YOLLARI
+    'TEM_Baglanti': {
+        'name': 'TEM_Baglanti',
+        'avg_speed_peak': 35,      
+        'avg_speed_offpeak': 65,   
+        'traffic_multiplier': 1.5,  
+        'toll': False,
+        'road_type': 'Bağlantı Yolu',
+        'keywords': ['TEM Bağlantı', 'Kavacık', 'Ümraniye', 'Samandıra', 'Kayışdağı']
+    },
+    
+    'Basin_Ekspres': {
+        'name': 'Basın Ekspres Yolu',
+        'avg_speed_peak': 40,      
+        'avg_speed_offpeak': 70,   
+        'traffic_multiplier': 1.4,  
+        'toll': False,
+        'road_type': 'Ekspres Yol',
+        'keywords': ['Basın Ekspres', 'İkitelli', 'Güneşli', 'Yenibosna']
+    },
+    
+    # DIŞ BÖLGELER VE BANLIYÖLER
+    'Beylikduzu_Buyukcekmece': {
+        'name': 'Beylikdüzü-Büyükçekmece Bölgesi',
+        'avg_speed_peak': 40,      
+        'avg_speed_offpeak': 65,   
+        'traffic_multiplier': 1.3,  
+        'toll': False,
+        'road_type': 'Banliyö',
+        'keywords': ['Beylikdüzü', 'Büyükçekmece', 'Esenyurt', 'Avcılar']
+    },
+    
+    'Tuzla_Gebze': {
+        'name': 'Tuzla-Gebze Bölgesi',
+        'avg_speed_peak': 45,      
+        'avg_speed_offpeak': 70,   
+        'traffic_multiplier': 1.3,  
+        'toll': False,
+        'road_type': 'Banliyö',
+        'keywords': ['Tuzla', 'Gebze', 'Çayırova', 'Darıca', 'Şekerpınar']
+    },
+    
+    'Sancaktepe_Sultanbeyli': {
+        'name': 'Sancaktepe-Sultanbeyli Bölgesi',
+        'avg_speed_peak': 35,      
+        'avg_speed_offpeak': 55,   
+        'traffic_multiplier': 1.4,  
+        'toll': False,
+        'road_type': 'Banliyö',
+        'keywords': ['Sancaktepe', 'Sultanbeyli', 'Samandıra', 'Sarıgazi']
+    },
+    
+    # ŞEHİR İÇİ YOĞUN BÖLGELER
+    'Taksim_Sisli': {
+        'name': 'Taksim-Şişli Merkez',
+        'avg_speed_peak': 15,      
+        'avg_speed_offpeak': 35,   
+        'traffic_multiplier': 2.2,  
+        'toll': False,
+        'road_type': 'Şehir İçi',
+        'keywords': ['Taksim', 'Şişli', 'Mecidiyeköy', 'Nişantaşı', 'Osmanbey']
+    },
+    
+    'Kadikoy_Merkez': {
+        'name': 'Kadıköy Merkez',
+        'avg_speed_peak': 18,      
+        'avg_speed_offpeak': 40,   
+        'traffic_multiplier': 2.1,  
+        'toll': False,
+        'road_type': 'Şehir İçi',
+        'keywords': ['Kadıköy', 'Moda', 'Bahariye', 'Altıyol', 'Söğütlüçeşme']
+    },
+    
+    'Uskudar_Umraniye': {
+        'name': 'Üsküdar-Ümraniye Aksı',
+        'avg_speed_peak': 22,      
+        'avg_speed_offpeak': 45,   
+        'traffic_multiplier': 1.9,  
+        'toll': False,
+        'road_type': 'Şehir İçi',
+        'keywords': ['Üsküdar', 'Ümraniye', 'Altunizade', 'Çamlıca', 'Acıbadem']
     }
 }
 
-# Yakıt fiyatları (TL/Litre) - Güncellenebilir
+# Yakıt fiyatları (TL/Litre) - 2024 Ekim ortalama fiyatları
 FUEL_PRICES = {
-    'Benzin': 39.48,
-    'Dizel': 40.28
+    'Benzin': 42.15,
+    'Dizel': 43.25,
+    'LPG': 24.85
+}
+
+# Trafik yoğunluğu saatleri
+PEAK_HOURS = {
+    'sabah': {'start': 7, 'end': 10},
+    'aksam': {'start': 17, 'end': 20}
 }
 
 def get_vehicle_specs(vehicle_name):
@@ -182,14 +365,76 @@ def get_traffic_zone(zone_name):
     """
     return TRAFFIC_ZONES.get(zone_name, None)
 
+def get_all_traffic_zones():
+    """
+    Tüm trafik bölgelerinin listesini döndürür
+    
+    Returns:
+        list: Bölge isimleri listesi
+    """
+    return list(TRAFFIC_ZONES.keys())
+
 def get_fuel_price(fuel_type):
     """
     Belirli bir yakıt tipinin fiyatını döndürür
     
     Args:
-        fuel_type (str): Yakıt tipi (Benzin/Dizel)
+        fuel_type (str): Yakıt tipi (Benzin/Dizel/LPG)
         
     Returns:
         float: Yakıt fiyatı (TL/Litre)
     """
     return FUEL_PRICES.get(fuel_type, 0)
+
+def find_zone_by_keyword(keyword):
+    """
+    Anahtar kelimeye göre trafik bölgesi bulur
+    
+    Args:
+        keyword (str): Aranacak anahtar kelime
+        
+    Returns:
+        tuple: (zone_key, zone_data) veya (None, None)
+    """
+    keyword_lower = keyword.lower()
+    for zone_key, zone_data in TRAFFIC_ZONES.items():
+        for kw in zone_data['keywords']:
+            if keyword_lower in kw.lower():
+                return zone_key, zone_data
+    return None, None
+
+def is_peak_hour(hour):
+    """
+    Verilen saatin yoğun trafik saati olup olmadığını kontrol eder
+    
+    Args:
+        hour (int): Saat (0-23)
+        
+    Returns:
+        bool: Yoğun saat ise True
+    """
+    for period in PEAK_HOURS.values():
+        if period['start'] <= hour < period['end']:
+            return True
+    return False
+
+def calculate_toll_cost(zones_used):
+    """
+    Kullanılan bölgelere göre toplam geçiş ücreti hesaplar
+    
+    Args:
+        zones_used (list): Kullanılan bölgelerin listesi
+        
+    Returns:
+        float: Toplam geçiş ücreti (TL)
+    """
+    total_toll = 0
+    for zone_name in zones_used:
+        zone = TRAFFIC_ZONES.get(zone_name, {})
+        if zone.get('toll', False):
+            if 'toll_price' in zone:
+                total_toll += zone['toll_price']
+            # toll_per_km varsa, mesafe bilgisi gerekir (bu örnekte sabit 20km varsayalım)
+            elif 'toll_per_km' in zone:
+                total_toll += zone['toll_per_km'] * 20  
+    return total_toll

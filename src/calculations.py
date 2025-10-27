@@ -4,13 +4,14 @@ Bu modül tüm hesaplama algoritmalarını içerir.
 """
 
 import numpy as np
-from database import TRAFFIC_ZONES, FUEL_PRICES
+from database import (TRAFFIC_ZONES, FUEL_PRICES, PEAK_HOURS, 
+                     find_zone_by_keyword, is_peak_hour, calculate_toll_cost)
 
 class RouteSegmentAnalyzer:
     """Rota segmentlerini analiz eder ve trafik özelliklerini belirler"""
     
     @staticmethod
-    def classify_route_segments(coordinates, elevations, distances):
+    def classify_route_segments(coordinates, elevations, distances, route_info=None):
         """
         Rotayı segmentlere ayırır ve her segmentin özelliklerini belirler
         
@@ -18,6 +19,7 @@ class RouteSegmentAnalyzer:
             coordinates (list): Koordinat listesi [(lat, lng), ...]
             elevations (list): Yükseklik listesi
             distances (list): Mesafe listesi (kümülatif)
+            route_info (dict): Google Maps'ten gelen rota bilgisi (opsiyonel)
             
         Returns:
             list: Segment listesi
@@ -36,8 +38,10 @@ class RouteSegmentAnalyzer:
             elevation_change = elevations[i + 1] - elevations[i]
             gradient = (elevation_change / (segment_distance * 1000)) * 100 if segment_distance > 0 else 0
             
-            # Segment tipini belirle (basit konum bazlı)
-            segment_type = RouteSegmentAnalyzer.determine_segment_type(lat1, lng1, lat2, lng2)
+            # Segment tipini belirle
+            segment_type, segment_zone = RouteSegmentAnalyzer.determine_segment_type(
+                lat1, lng1, lat2, lng2, route_info
+            )
             
             segments.append({
                 'start_idx': i,
@@ -46,40 +50,107 @@ class RouteSegmentAnalyzer:
                 'gradient': gradient,
                 'elevation_change': elevation_change,
                 'type': segment_type,
-                'traffic_zone': segment_type
+                'traffic_zone': segment_zone,
+                'coordinates': [(lat1, lng1), (lat2, lng2)]
             })
         
         return segments
     
     @staticmethod
-    def determine_segment_type(lat1, lng1, lat2, lng2):
+    def determine_segment_type(lat1, lng1, lat2, lng2, route_info=None):
         """
-        Koordinatlara göre segment tipini belirle
+        Koordinatlara ve rota bilgisine göre segment tipini belirle
         
         Args:
             lat1, lng1, lat2, lng2: Başlangıç ve bitiş koordinatları
+            route_info: Google Maps'ten gelen rota bilgisi
             
         Returns:
-            str: Segment tipi
+            tuple: (segment_type, zone_data)
         """
-        # Maltepe-Kartal arasında (E5 bölgesi)
-        if 40.92 < lat1 < 40.94 and 29.14 < lng1 < 29.18:
-            return 'Anadolu'
-        # Aydos Ormanı civarı
-        elif lat1 > 40.95 or lng1 > 29.19:
-            return 'Suburban'
-        # E5 yakını
-        elif 40.93 < lat1 < 40.95:
-            return 'E5'
+        # İstanbul'un yaklaşık koordinat aralıkları
+        # Avrupa Yakası: lng < 29.0
+        # Anadolu Yakası: lng > 29.0
+        # Kuzey (TEM/3. Köprü): lat > 41.1
+        # Güney (Sahil): lat < 40.95
+        
+        avg_lat = (lat1 + lat2) / 2
+        avg_lng = (lng1 + lng2) / 2
+        
+        # Boğaz geçişleri kontrolü (köprü veya tünel)
+        if abs(lng1 - lng2) > 0.05:  # Büyük boylam değişimi = boğaz geçişi
+            if avg_lat > 41.15:
+                return 'YSS_Kopru', TRAFFIC_ZONES['YSS_Kopru']
+            elif avg_lat > 41.08:
+                return 'FSM_Kopru', TRAFFIC_ZONES['FSM_Kopru']
+            elif avg_lat > 41.03:
+                return '15_Temmuz_Kopru', TRAFFIC_ZONES['15_Temmuz_Kopru']
+            elif avg_lat < 40.99:
+                return 'Avrasya_Tuneli', TRAFFIC_ZONES['Avrasya_Tuneli']
+        
+        # Kuzey Marmara Otoyolu
+        if avg_lat > 41.15:
+            if avg_lng < 28.7 or avg_lng > 29.3:
+                return 'Kuzey_Marmara_Otoyolu', TRAFFIC_ZONES['Kuzey_Marmara_Otoyolu']
+        
+        # TEM Otoyolu
+        if 41.05 < avg_lat < 41.15:
+            return 'O-1_O-2_Otoyol', TRAFFIC_ZONES['O-1_O-2_Otoyol']
+        
+        # E-5 / D-100
+        if 40.97 < avg_lat < 41.02:
+            return 'D100_E5', TRAFFIC_ZONES['D100_E5']
+        
+        # Sahil yolları
+        if avg_lat < 40.97:
+            if avg_lng < 29.0:
+                return 'Sahil_Yolu_Avrupa', TRAFFIC_ZONES['Sahil_Yolu_Avrupa']
+            else:
+                return 'Sahil_Yolu_Anadolu', TRAFFIC_ZONES['Sahil_Yolu_Anadolu']
+        
+        # Bölgesel ayrımlar
+        # Avrupa Yakası
+        if avg_lng < 29.0:
+            # Beylikdüzü-Büyükçekmece
+            if avg_lng < 28.7:
+                return 'Beylikduzu_Buyukcekmece', TRAFFIC_ZONES['Beylikduzu_Buyukcekmece']
+            # Şişli-Taksim
+            elif 28.96 < avg_lng < 29.0 and 41.03 < avg_lat < 41.07:
+                return 'Taksim_Sisli', TRAFFIC_ZONES['Taksim_Sisli']
+            # Barbaros Bulvarı
+            elif 29.0 < avg_lng < 29.05 and avg_lat > 41.04:
+                return 'Barbaros_Bulvari', TRAFFIC_ZONES['Barbaros_Bulvari']
+            # Basın Ekspres
+            elif 28.8 < avg_lng < 28.9:
+                return 'Basin_Ekspres', TRAFFIC_ZONES['Basin_Ekspres']
+        
+        # Anadolu Yakası
         else:
-            return 'Suburban'
+            # Kadıköy merkez
+            if 29.0 < avg_lng < 29.05 and 40.98 < avg_lat < 41.02:
+                return 'Kadikoy_Merkez', TRAFFIC_ZONES['Kadikoy_Merkez']
+            # Bağdat Caddesi
+            elif 29.02 < avg_lng < 29.15 and avg_lat < 40.98:
+                return 'Bagdat_Caddesi', TRAFFIC_ZONES['Bagdat_Caddesi']
+            # Üsküdar-Ümraniye
+            elif 29.0 < avg_lng < 29.1 and 41.0 < avg_lat < 41.05:
+                return 'Uskudar_Umraniye', TRAFFIC_ZONES['Uskudar_Umraniye']
+            # Tuzla-Gebze
+            elif avg_lng > 29.3:
+                return 'Tuzla_Gebze', TRAFFIC_ZONES['Tuzla_Gebze']
+            # Sancaktepe-Sultanbeyli
+            elif avg_lng > 29.15 and avg_lat > 40.95:
+                return 'Sancaktepe_Sultanbeyli', TRAFFIC_ZONES['Sancaktepe_Sultanbeyli']
+        
+        # Varsayılan: TEM Bağlantı
+        return 'TEM_Baglanti', TRAFFIC_ZONES['TEM_Baglanti']
 
 
 class FuelConsumptionCalculator:
     """Yakıt tüketimi hesaplama motoru"""
     
     @staticmethod
-    def calculate_fuel_consumption(vehicle_specs, route_data, time_of_day='peak'):
+    def calculate_fuel_consumption(vehicle_specs, route_data, time_of_day='peak', route_info=None):
         """
         Segment bazlı gerçekçi yakıt tüketimi hesaplama
         
@@ -87,6 +158,7 @@ class FuelConsumptionCalculator:
             vehicle_specs (dict): Araç özellikleri
             route_data (dict): Rota verileri
             time_of_day (str): 'peak' veya 'offpeak'
+            route_info (dict): Google Maps rota bilgisi
             
         Returns:
             dict: Yakıt tüketimi sonuçları
@@ -95,17 +167,34 @@ class FuelConsumptionCalculator:
         segments = RouteSegmentAnalyzer.classify_route_segments(
             route_data['coordinates'],
             route_data['elevations'],
-            route_data['distances']
+            route_data['distances'],
+            route_info
         )
         
         total_fuel = 0
-        segment_stats = {zone: {'distance': 0, 'fuel': 0} for zone in TRAFFIC_ZONES}
+        segment_stats = {}
+        zones_used = []
         
         for segment in segments:
+            zone = segment['traffic_zone']
+            
+            # Zone istatistiklerini başlat
+            if zone['name'] not in segment_stats:
+                segment_stats[zone['name']] = {
+                    'distance': 0, 
+                    'fuel': 0,
+                    'avg_speed': zone['avg_speed_peak'] if time_of_day == 'peak' else zone['avg_speed_offpeak'],
+                    'road_type': zone['road_type'],
+                    'toll': zone.get('toll', False),
+                    'toll_price': zone.get('toll_price', 0)
+                }
+                if zone.get('toll', False):
+                    zones_used.append(segment['type'])
+            
             # Temel yakıt tüketimi
             base_consumption = FuelConsumptionCalculator._calculate_base_consumption(
                 vehicle_specs, 
-                segment['traffic_zone'],
+                zone,
                 time_of_day
             )
             
@@ -120,31 +209,39 @@ class FuelConsumptionCalculator:
             total_fuel += segment_fuel
             
             # İstatistikleri güncelle
-            zone = segment['traffic_zone']
-            segment_stats[zone]['distance'] += segment['distance_km']
-            segment_stats[zone]['fuel'] += segment_fuel
+            segment_stats[zone['name']]['distance'] += segment['distance_km']
+            segment_stats[zone['name']]['fuel'] += segment_fuel
         
         # Yakıt maliyeti hesapla
-        fuel_price = FUEL_PRICES.get(vehicle_specs['fuel_type'], 40)
+        fuel_price = FUEL_PRICES.get(vehicle_specs['fuel_type'], 42)
         fuel_cost = total_fuel * fuel_price
+        
+        # Geçiş ücretlerini hesapla
+        toll_cost = calculate_toll_cost(zones_used)
+        
+        # Toplam maliyet
+        total_cost = fuel_cost + toll_cost
         
         return {
             'total_fuel_liters': total_fuel,
             'fuel_per_100km': (total_fuel / route_data['total_distance_km']) * 100 if route_data['total_distance_km'] > 0 else 0,
             'fuel_cost_tl': fuel_cost,
+            'toll_cost_tl': toll_cost,
+            'total_cost_tl': total_cost,
             'fuel_price_per_liter': fuel_price,
             'segment_stats': segment_stats,
-            'time_of_day': time_of_day
+            'time_of_day': time_of_day,
+            'zones_used': list(set(zones_used))
         }
     
     @staticmethod
-    def _calculate_base_consumption(vehicle_specs, traffic_zone, time_of_day):
+    def _calculate_base_consumption(vehicle_specs, zone_info, time_of_day):
         """
         Baz yakıt tüketimini hesapla
         
         Args:
             vehicle_specs (dict): Araç özellikleri
-            traffic_zone (str): Trafik bölgesi
+            zone_info (dict): Trafik bölgesi bilgileri
             time_of_day (str): Zaman dilimi
             
         Returns:
@@ -154,29 +251,33 @@ class FuelConsumptionCalculator:
         city_consumption = vehicle_specs['fuel_consumption_city']
         highway_consumption = vehicle_specs['fuel_consumption_highway']
         
-        # Trafik bölgesi verilerini al
-        zone_info = TRAFFIC_ZONES.get(traffic_zone, TRAFFIC_ZONES['Suburban'])
-        
         # Hıza göre tüketimi hesapla
         avg_speed = zone_info['avg_speed_peak'] if time_of_day == 'peak' else zone_info['avg_speed_offpeak']
         
         # Hız bazlı interpolasyon
-        if avg_speed <= 30:
-            base_consumption = city_consumption * 1.3  # Çok yavaş trafik
+        if avg_speed <= 20:
+            base_consumption = city_consumption * 1.4  # Çok yavaş trafik
+        elif avg_speed <= 30:
+            base_consumption = city_consumption * 1.2
         elif avg_speed <= 50:
             base_consumption = city_consumption
         elif avg_speed <= 80:
             # Şehir içi ve şehir dışı arasında interpolasyon
             ratio = (avg_speed - 50) / 30
             base_consumption = city_consumption * (1 - ratio) + highway_consumption * ratio
-        else:
+        elif avg_speed <= 100:
             base_consumption = highway_consumption
+        else:
+            # Yüksek hızda tüketim artar
+            base_consumption = highway_consumption * 1.15
         
         # Trafik çarpanını uygula
         base_consumption *= zone_info['traffic_multiplier']
         
-        # Dur-kalk etkisi (yoğun saatlerde)
-        if time_of_day == 'peak' and avg_speed < 40:
+        # Dur-kalk etkisi (şehir içi yoğun bölgelerde)
+        if zone_info['road_type'] == 'Şehir İçi' and time_of_day == 'peak':
+            base_consumption *= 1.2  # %20 ek tüketim
+        elif zone_info['road_type'] == 'Cadde' and avg_speed < 30:
             base_consumption *= 1.15  # %15 ek tüketim
         
         return base_consumption
@@ -258,6 +359,9 @@ class FuelConsumptionCalculator:
                 warnings.append(f"⚠️ Dik yokuşlarda (%{max_gradient:.1f}) zorlanabilir")
             else:
                 difficulty = 'ORTA'
+        elif max_gradient > 10:
+            if power_to_weight < 0.08:
+                difficulty = 'ORTA'
         
         # Tork değerlendirmesi
         if torque_to_weight < 0.15 and max_gradient > 10:
@@ -296,7 +400,8 @@ class FuelConsumptionCalculator:
         # CO2 emisyon faktörleri (kg CO2 / litre)
         emission_factors = {
             'Benzin': 2.31,
-            'Dizel': 2.68
+            'Dizel': 2.68,
+            'LPG': 1.51
         }
         
         factor = emission_factors.get(fuel_type, 2.5)
