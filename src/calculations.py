@@ -1,6 +1,6 @@
 """
-Hesaplama Modülü - Rota Analizi ve Yakıt Tüketimi Hesaplamaları
-Bu modül tüm hesaplama algoritmalarını içerir.
+Hesaplama Modülü - Rota Analizi ve Yakıt Tüketimi Hesaplamaları (Geliştirilmiş)
+Bu modül tüm hesaplama algoritmalarını ve alternatif rota önerilerini içerir.
 """
 
 import numpy as np
@@ -51,7 +51,8 @@ class RouteSegmentAnalyzer:
                 'elevation_change': elevation_change,
                 'type': segment_type,
                 'traffic_zone': segment_zone,
-                'coordinates': [(lat1, lng1), (lat2, lng2)]
+                'coordinates': [(lat1, lng1), (lat2, lng2)],
+                'is_critical': abs(gradient) > 15  # Kritik eğim eşiği: %15
             })
         
         return segments
@@ -144,6 +145,174 @@ class RouteSegmentAnalyzer:
         
         # Varsayılan: TEM Bağlantı
         return 'TEM_Baglanti', TRAFFIC_ZONES['TEM_Baglanti']
+    
+    @staticmethod
+    def identify_critical_sections(segments, gradient_threshold=15):
+        """
+        Kritik eğim bölgelerini tespit et
+        
+        Args:
+            segments (list): Segment listesi
+            gradient_threshold (float): Kritik eğim eşiği (%)
+            
+        Returns:
+            list: Kritik segment listesi
+        """
+        critical_sections = []
+        
+        for i, segment in enumerate(segments):
+            if abs(segment['gradient']) > gradient_threshold:
+                critical_sections.append({
+                    'segment_index': i,
+                    'segment': segment,
+                    'gradient': segment['gradient'],
+                    'distance_km': segment['distance_km'],
+                    'start_coord': segment['coordinates'][0],
+                    'end_coord': segment['coordinates'][1],
+                    'severity': 'YÜKSEK' if abs(segment['gradient']) > 20 else 'ORTA'
+                })
+        
+        return critical_sections
+
+
+class AlternativeRouteOptimizer:
+    """Kritik eğim bölgeleri için alternatif rota önerisi"""
+    
+    def __init__(self, api_key):
+        """
+        Args:
+            api_key (str): Google Maps API anahtarı
+        """
+        self.api_key = api_key
+    
+    def find_alternative_routes(self, origin, destination, critical_sections, max_alternatives=3):
+        """
+        Kritik bölgeleri atlayan alternatif rotalar bul
+        
+        Args:
+            origin (str/tuple): Başlangıç noktası
+            destination (str/tuple): Bitiş noktası
+            critical_sections (list): Kritik segment listesi
+            max_alternatives (int): Maksimum alternatif sayısı
+            
+        Returns:
+            list: Alternatif rota listesi
+        """
+        import requests
+        
+        alternatives = []
+        
+        # Google Directions API'de "alternatives" parametresi ile alternatif rotalar iste
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        
+        # Origin ve destination'ı string formatına çevir
+        if isinstance(origin, tuple):
+            origin_str = f"{origin[0]},{origin[1]}"
+        else:
+            origin_str = origin
+            
+        if isinstance(destination, tuple):
+            destination_str = f"{destination[0]},{destination[1]}"
+        else:
+            destination_str = destination
+        
+        params = {
+            'origin': origin_str,
+            'destination': destination_str,
+            'mode': 'driving',
+            'language': 'tr',
+            'alternatives': 'true',  # Alternatif rotalar iste
+            'key': self.api_key
+        }
+        
+        response = requests.get(url, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data['status'] == 'OK' and 'routes' in data:
+                # İlk rota orijinal, diğerleri alternatif
+                for route in data['routes'][:max_alternatives + 1]:
+                    alternatives.append({
+                        'route_data': route,
+                        'summary': route.get('summary', 'Alternatif Rota'),
+                        'distance': route['legs'][0]['distance']['value'] / 1000,  # km
+                        'duration': route['legs'][0]['duration']['value'] / 60,  # dakika
+                        'polyline': route['overview_polyline']['points']
+                    })
+        
+        return alternatives
+    
+    def generate_waypoint_based_alternative(self, origin, destination, critical_sections):
+        """
+        Kritik bölgeleri waypoint kullanarak atlayan rota oluştur
+        
+        Args:
+            origin (str/tuple): Başlangıç noktası
+            destination (str/tuple): Bitiş noktası
+            critical_sections (list): Kritik segment listesi
+            
+        Returns:
+            dict: Waypoint bazlı alternatif rota
+        """
+        import requests
+        
+        if not critical_sections:
+            return None
+        
+        # Kritik bölgelerin orta noktalarını hesapla
+        waypoints = []
+        for section in critical_sections:
+            lat1, lng1 = section['start_coord']
+            lat2, lng2 = section['end_coord']
+            
+            # Kritik bölgenin dik yönünde bir waypoint oluştur
+            # (Basit bir offset hesaplaması - gerçek uygulamada daha karmaşık olabilir)
+            offset_lat = (lat2 - lat1) * 0.5
+            offset_lng = -(lng2 - lng1) * 0.5  # Dik yön için negatif
+            
+            waypoint_lat = (lat1 + lat2) / 2 + offset_lat
+            waypoint_lng = (lng1 + lng2) / 2 + offset_lng
+            
+            waypoints.append(f"{waypoint_lat},{waypoint_lng}")
+        
+        # Waypoint'ler ile rota oluştur
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        
+        if isinstance(origin, tuple):
+            origin_str = f"{origin[0]},{origin[1]}"
+        else:
+            origin_str = origin
+            
+        if isinstance(destination, tuple):
+            destination_str = f"{destination[0]},{destination[1]}"
+        else:
+            destination_str = destination
+        
+        params = {
+            'origin': origin_str,
+            'destination': destination_str,
+            'waypoints': '|'.join(waypoints[:3]),  # Maksimum 3 waypoint
+            'mode': 'driving',
+            'language': 'tr',
+            'key': self.api_key
+        }
+        
+        response = requests.get(url, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data['status'] == 'OK' and 'routes' in data:
+                route = data['routes'][0]
+                return {
+                    'route_data': route,
+                    'summary': 'Waypoint Bazlı Alternatif',
+                    'distance': sum(leg['distance']['value'] for leg in route['legs']) / 1000,
+                    'duration': sum(leg['duration']['value'] for leg in route['legs']) / 60,
+                    'polyline': route['overview_polyline']['points'],
+                    'waypoints_used': waypoints
+                }
+        
+        return None
 
 
 class FuelConsumptionCalculator:
@@ -174,6 +343,9 @@ class FuelConsumptionCalculator:
         total_fuel = 0
         segment_stats = {}
         zones_used = []
+        
+        # Kritik segmentleri tespit et
+        critical_sections = RouteSegmentAnalyzer.identify_critical_sections(segments)
         
         for segment in segments:
             zone = segment['traffic_zone']
@@ -231,7 +403,9 @@ class FuelConsumptionCalculator:
             'fuel_price_per_liter': fuel_price,
             'segment_stats': segment_stats,
             'time_of_day': time_of_day,
-            'zones_used': list(set(zones_used))
+            'zones_used': list(set(zones_used)),
+            'critical_sections': critical_sections,
+            'has_critical_sections': len(critical_sections) > 0
         }
     
     @staticmethod
