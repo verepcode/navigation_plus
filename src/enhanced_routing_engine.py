@@ -10,6 +10,133 @@ from math import radians, cos, sin, asin, sqrt, atan2, degrees
 from datetime import datetime
 import requests
 import urllib.parse
+import time
+
+
+class SmartGeocoder:
+    """
+    Akıllı geocoding: Adres -> GPS koordinat dönüşümü
+    Nominatim (OpenStreetMap) kullanır
+    """
+    def __init__(self):
+        self.cache = {}
+        self.nominatim_url = "https://nominatim.openstreetmap.org/search"
+        self.headers = {
+            'User-Agent': 'RouteOptimizer/1.0 (routing-app@example.com)'
+        }
+        self.last_request_time = 0
+        self.min_request_interval = 1.0  # Nominatim politikası: 1 istek/saniye
+    
+    def geocode(self, location_query: str) -> dict:
+        """
+        Adres/konum -> GPS koordinat dönüşümü
+        
+        Args:
+            location_query: Adres string'i (örn: "Beykoz Meydanı, İstanbul")
+        
+        Returns:
+            {'lat': float, 'lon': float, 'display_name': str} veya None
+        """
+        # Cache kontrolü
+        if location_query in self.cache:
+            print(f"  ✓ Cache'den alındı: {location_query}")
+            return self.cache[location_query]
+        
+        # Rate limiting
+        self._respect_rate_limit()
+        
+        # Nominatim sorgusu
+        params = {
+            'q': location_query,
+            'format': 'json',
+            'limit': 1,
+            'countrycodes': 'tr',
+            'addressdetails': 1
+        }
+        
+        try:
+            response = requests.get(
+                self.nominatim_url,
+                params=params,
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                results = response.json()
+                
+                if results:
+                    result = results[0]
+                    coords = {
+                        'lat': float(result['lat']),
+                        'lon': float(result['lon']),
+                        'display_name': result['display_name'],
+                        'importance': result.get('importance', 0)
+                    }
+                    
+                    # Cache'e kaydet
+                    self.cache[location_query] = coords
+                    print(f"  ✓ Konum bulundu: {coords['display_name']}")
+                    return coords
+            
+            print(f"  ✗ Konum bulunamadı: {location_query}")
+            return None
+            
+        except Exception as e:
+            print(f"  ✗ Geocoding hatası: {e}")
+            return None
+    
+    def _respect_rate_limit(self):
+        """Nominatim rate limiting: 1 istek/saniye"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
+    def find_nearest_node(self, location_query: str, nodes: dict) -> str:
+        """
+        Adres -> En yakın yol network node'unu bul
+        
+        Args:
+            location_query: Adres string'i
+            nodes: Yol ağı düğümleri dictionary
+        
+        Returns:
+            En yakın node ID (string) veya None
+        """
+        coords = self.geocode(location_query)
+        
+        if not coords:
+            return None
+        
+        target_lat, target_lon = coords['lat'], coords['lon']
+        
+        # En yakın node'u bul (basit Euclidean mesafe)
+        min_distance = float('inf')
+        closest_node = None
+        
+        for node_id, node_data in nodes.items():
+            gps = node_data.get('gps', [0, 0])
+            if len(gps) < 2:
+                continue
+                
+            node_lat, node_lon = gps[0], gps[1]
+            
+            # Basit mesafe hesabı
+            distance = ((target_lat - node_lat)**2 + (target_lon - node_lon)**2)**0.5
+            
+            if distance < min_distance:
+                min_distance = distance
+                closest_node = node_id
+        
+        if closest_node:
+            print(f"  ✓ En yakın node: {closest_node} (mesafe: {min_distance:.6f}°)")
+        
+        return closest_node
 
 
 class EnhancedRoutingEngine:
@@ -22,6 +149,9 @@ class EnhancedRoutingEngine:
         self.edges = road_network.get('edges', [])
         self.vehicle_db = vehicle_db
         self.traffic_zones = traffic_zones
+        
+        # Geocoder instance'ı oluştur
+        self.geocoder = SmartGeocoder()
         
         # Kenarları indeksle
         self._build_edge_index()
@@ -38,6 +168,7 @@ class EnhancedRoutingEngine:
         print(f"✓ Enhanced Routing Engine başlatıldı")
         print(f"  • {len(self.nodes)} düğüm")
         print(f"  • {len(self.edges)} kenar")
+        print(f"  • Geocoder aktif (Nominatim)")
     
     
     def _build_edge_index(self):
@@ -125,6 +256,64 @@ class EnhancedRoutingEngine:
         }
     
     
+    def find_route_by_address(self, start_address, end_address, vehicle_name,
+                             time_of_day='offpeak', mode='power_optimized'):
+        """
+        Adres kullanarak rota bul - YENİ METOD
+        
+        Args:
+            start_address: Başlangıç adresi (örn: "Beykoz Meydanı, İstanbul")
+            end_address: Varış adresi (örn: "Çubuklu Sahili, Beykoz")
+            vehicle_name: Araç adı
+            time_of_day: Zaman dilimi
+            mode: Rota modu
+        
+        Returns:
+            Rota sonucu dictionary veya None
+        """
+        print(f"\n{'='*70}")
+        print("ADRES TABANLI ROTA HESAPLAMA")
+        print(f"{'='*70}")
+        print(f"Başlangıç: {start_address}")
+        print(f"Varış: {end_address}")
+        
+        # Adresleri GPS koordinatlarına çevir
+        print("\n🔍 Başlangıç konumu aranıyor...")
+        start_node = self.geocoder.find_nearest_node(start_address, self.nodes)
+        
+        if not start_node:
+            print(f"❌ Başlangıç konumu bulunamadı: {start_address}")
+            return None
+        
+        print("\n🔍 Varış konumu aranıyor...")
+        end_node = self.geocoder.find_nearest_node(end_address, self.nodes)
+        
+        if not end_node:
+            print(f"❌ Varış konumu bulunamadı: {end_address}")
+            return None
+        
+        if start_node == end_node:
+            print("❌ Başlangıç ve varış aynı nokta!")
+            return None
+        
+        # GPS koordinatlarını al
+        start_gps = self.nodes[start_node]['gps']
+        end_gps = self.nodes[end_node]['gps']
+        
+        print(f"\n✓ Koordinatlar bulundu:")
+        print(f"  Başlangıç: {start_gps[0]}, {start_gps[1]}")
+        print(f"  Varış: {end_gps[0]}, {end_gps[1]}")
+        
+        # Normal rota hesaplama metodunu çağır
+        return self.find_optimal_route(
+            start_gps=tuple(start_gps),
+            end_gps=tuple(end_gps),
+            vehicle_name=vehicle_name,
+            time_of_day=time_of_day,
+            mode=mode
+        )
+    
+    
     def find_optimal_route(self, start_gps, end_gps, vehicle_name, 
                           time_of_day='offpeak', mode='power_optimized'):
         """
@@ -147,9 +336,7 @@ class EnhancedRoutingEngine:
         print(f"  • Maksimum: %{vehicle_capability['maximum_slope']}")
         
         # En yakın düğümleri bul
-        print(f"başlangıç: {start_gps}")
         start_node = self.find_closest_node(*start_gps)
-        print(f"bitiş: {end_gps}")
         end_node = self.find_closest_node(*end_gps)
         
         if not start_node:
@@ -219,16 +406,16 @@ class EnhancedRoutingEngine:
         if not lat or not lon:
             print(f"⚠️ Geçersiz koordinat: {lat}, {lon}")
             return None
-        
-        print(f"lat and lon: {lat}, {lon}")
+            
         min_distance = float('inf')
         closest_node = None
         print(f"Burada")
         for node_id, node_data in self.nodes.items():
             gps = node_data.get('gps', [0, 0])
+            elevation = node_data.get('elevation', 50)
+            # print(f"elevation: {elevation}")
             node_lat = gps[0] if len(gps) > 0 else 0
             node_lon = gps[1] if len(gps) > 1 else 0
-            
             if not node_lat or not node_lon:
                 continue
             
@@ -267,11 +454,20 @@ class EnhancedRoutingEngine:
         from_elevation = from_node.get('elevation', 50)
         to_elevation = to_node.get('elevation', 50)
         elevation_change = to_elevation - from_elevation
+        # print(f"elevation_change: {elevation_change}")
+        gps = from_node.get('gps', [])            
+        from_node_lat = gps[0] if len(gps) >= 2 else 0      
+        from_node_lon = gps[1] if len(gps) >= 2 else 0
+        
+        gps = to_node.get('gps', [])            
+        to_node_lat = gps[0] if len(gps) >= 2 else 0      
+        to_node_lon = gps[1] if len(gps) >= 2 else 0
+        
         
         # Mesafe
         distance = self.haversine_distance(
-            from_node.get('lat', 0), from_node.get('lon', 0),
-            to_node.get('lat', 0), to_node.get('lon', 0)
+            from_node_lat, from_node_lon,
+            to_node_lat, to_node_lon
         )
         
         # Eğim yüzdesi
@@ -330,6 +526,7 @@ class EnhancedRoutingEngine:
         
         # Eğim penaltısı
         abs_slope = abs(slope_percent)
+        # print(f"slope is: {abs_slope}")
         if abs_slope <= comfortable_slope:
             slope_penalty = 1.0
             passable = True
@@ -391,6 +588,15 @@ class EnhancedRoutingEngine:
         start_node = str(start_node)
         end_node = str(end_node)
         
+        # DEBUG: Başlangıç durumunu kontrol et
+        print(f"  DEBUG: start_node = {start_node}")
+        print(f"  DEBUG: start_node in outgoing_edges? {start_node in self.outgoing_edges}")
+        if start_node in self.outgoing_edges:
+            print(f"  DEBUG: Komşu sayısı: {len(self.outgoing_edges[start_node])}")
+        else:
+            print(f"  DEBUG: SORUN! start_node için hiç komşu yok!")
+            print(f"  DEBUG: outgoing_edges keys örneği: {list(self.outgoing_edges.keys())[:5]}")
+        
         # Priority queue
         open_set = [(0, start_node, [start_node])]
         closed_set = set()
@@ -398,6 +604,8 @@ class EnhancedRoutingEngine:
         
         iteration = 0
         max_iterations = 50000  # Artırıldı
+        # DEBUG: Hangi düğümleri ziyaret ettik?
+        visited_nodes = set()
         
         print(f"  İterasyon başlıyor... (maks {max_iterations})")
         
@@ -418,6 +626,23 @@ class EnhancedRoutingEngine:
                 continue
             
             closed_set.add(current_node)
+            visited_nodes.add(current_node)
+
+            # Komşuları kontrol et
+            passable_neighbors = 0
+            blocked_neighbors = 0
+            
+            # DEBUG: İlk iterasyonda komşu durumunu göster
+            edges_for_current = self.outgoing_edges.get(current_node, [])
+            if iteration == 1:
+                print(f"  DEBUG: İlk node ({current_node}) için {len(edges_for_current)} komşu bulundu")
+        
+            # Komşuları kontrol et
+            neighbors = self.outgoing_edges.get(current_node, [])
+            
+            # DEBUG: İlk iterasyonda komşu durumunu göster
+            if iteration == 1:
+                print(f"  DEBUG: İlk node ({current_node}) için {len(neighbors)} komşu bulundu")
             
             # Komşuları kontrol et
             for edge in self.outgoing_edges.get(current_node, []):
@@ -431,12 +656,29 @@ class EnhancedRoutingEngine:
                     edge, vehicle_capability, time_of_day, mode
                 )
                 
+                # Başlangıç ve bitiş noktalarından çıkış/giriş için eğim kontrolünü gevşet
+                is_start_edge = (current_node == start_node)
+                is_end_edge = (neighbor == end_node)
+                
+                # Geçilemez mi?
+                if not edge_cost_info['passable'] and not (is_start_edge or is_end_edge):
+                    blocked_neighbors += 1
+                    continue
+                
+                passable_neighbors += 1
+                
+                # Eğer başlangıç veya bitiş kenarıysa ve geçilemezse, yüksek ceza ver
+                cost_multiplier = 1.0
+                if (is_start_edge or is_end_edge) and not edge_cost_info['passable']:
+                    cost_multiplier = 3.0
+                
                 # Geçilemez mi?
                 if not edge_cost_info['passable']:
                     continue
                 
                 # Yeni maliyet
-                tentative_g = g_costs[current_node] + edge_cost_info['total_cost']
+                tentative_g = g_costs[current_node] + (edge_cost_info['total_cost'] * cost_multiplier)
+                # tentative_g = g_costs[current_node] + edge_cost_info['total_cost']
                 
                 if neighbor not in g_costs or tentative_g < g_costs[neighbor]:
                     g_costs[neighbor] = tentative_g
@@ -447,8 +689,25 @@ class EnhancedRoutingEngine:
                     
                     new_path = current_path + [neighbor]
                     heapq.heappush(open_set, (f_cost, neighbor, new_path))
+
+            # İlk 5 iterasyonda detay göster
+            if iteration <= 5:
+                print(f"  DEBUG iter {iteration}: node={current_node}, geçilebilir={passable_neighbors}, engellenmiş={blocked_neighbors}")
         
         print(f"  ❌ Rota bulunamadı ({iteration} iterasyon)")
+        print(f"  DEBUG: Toplam {len(visited_nodes)} farklı düğüm ziyaret edildi")
+        print(f"  DEBUG: Hedef düğüme ulaşılamadı")
+        # Hedefe en yakın ziyaret edilen düğümü bul
+        closest_to_end = None
+        min_dist_to_end = float('inf')
+        for node in visited_nodes:
+            dist = self.calculate_heuristic(node, end_node)
+            if dist < min_dist_to_end:
+                min_dist_to_end = dist
+                closest_to_end = node
+        
+        print(f"  DEBUG: Hedefe en yakın ulaşılan düğüm: {closest_to_end} (mesafe: {min_dist_to_end:.0f}m)")
+
         return None
     
     
@@ -457,12 +716,21 @@ class EnhancedRoutingEngine:
         from_node = self.nodes.get(str(from_node_id), {})
         to_node = self.nodes.get(str(to_node_id), {})
         
+        gps = from_node.get('gps', [])            
+        from_node_lat = gps[0] if len(gps) >= 2 else 0      
+        from_node_lon = gps[1] if len(gps) >= 2 else 0
+        
+        gps = to_node.get('gps', [])            
+        to_node_lat = gps[0] if len(gps) >= 2 else 0      
+        to_node_lon = gps[1] if len(gps) >= 2 else 0
+
         if not from_node or not to_node:
             return float('inf')
         
+        # Mesafe
         distance = self.haversine_distance(
-            from_node.get('lat', 0), from_node.get('lon', 0),
-            to_node.get('lat', 0), to_node.get('lon', 0)
+            from_node_lat, from_node_lon,
+            to_node_lat, to_node_lon
         )
         
         return distance / 100
