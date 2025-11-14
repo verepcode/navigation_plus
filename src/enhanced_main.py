@@ -98,9 +98,9 @@ class EnhancedNavigationSystem:
         self.current_graph = self.network_manager.get_graph()
         print("Graph alındı")
         # Yükseklik verisi ekle
-        if add_elevation:
-            print("\n🏔️ Yükseklik verileri ekleniyor...")
-            self._add_elevation_data()
+        # if add_elevation:
+        #     print("\n🏔️ Yükseklik verileri ekleniyor...")
+        #     self._add_elevation_data()
         
         # Enhanced routing engine'i başlat
         self.router = EnhancedRoutingEngine(
@@ -185,11 +185,11 @@ class EnhancedNavigationSystem:
             print(f"❌ Araç bulunamadı: {vehicle_name}")
             return None
         
-        print(f"📊 Araç Özellikleri:")
-        print(f"  • Güç/Ağırlık: {vehicle_cap['power_weight_ratio']} HP/ton")
-        print(f"  • Rahat eğim limiti: %{vehicle_cap['comfortable_slope']}")
-        print(f"  • Zorlu eğim limiti: %{vehicle_cap['manageable_slope']}")
-        print(f"  • Maksimum eğim: %{vehicle_cap['maximum_slope']}\n")
+        # print(f"📊 Araç Özellikleri:")
+        # print(f"  • Güç/Ağırlık: {vehicle_cap['power_weight_ratio']} HP/ton")
+        # print(f"  • Rahat eğim limiti: %{vehicle_cap['comfortable_slope']}")
+        # print(f"  • Zorlu eğim limiti: %{vehicle_cap['manageable_slope']}")
+        # print(f"  • Maksimum eğim: %{vehicle_cap['maximum_slope']}\n")
         
         # Optimizasyon modunu belirle
         mode = 'power_optimized' if avoid_steep else 'balanced'

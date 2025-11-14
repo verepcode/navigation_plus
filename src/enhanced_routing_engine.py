@@ -145,7 +145,11 @@ class EnhancedRoutingEngine:
     """
     
     def __init__(self, road_network, vehicle_db, traffic_zones):
+        print(f"🔍 1. road_network'ten gelen: {list(road_network.get('nodes', {}).values())[0].get('elevation')}")
+    
         self.nodes = road_network.get('nodes', {})
+        print(f"🔍 2. self.nodes'a atandıktan sonra: {list(self.nodes.values())[0].get('elevation')}")
+    
         self.edges = road_network.get('edges', [])
         self.vehicle_db = vehicle_db
         self.traffic_zones = traffic_zones
@@ -164,6 +168,8 @@ class EnhancedRoutingEngine:
             'extreme': '#ff0000',    # Kırmızı: %15+
             'descent': '#0088ff'     # Mavi: İniş
         }
+        print(f"🔍 3. __init__ sonunda: {list(self.nodes.values())[0].get('elevation')}")
+
         
         print(f"✓ Enhanced Routing Engine başlatıldı")
         print(f"  • {len(self.nodes)} düğüm")
@@ -329,11 +335,11 @@ class EnhancedRoutingEngine:
             print(f"❌ Araç bulunamadı: {vehicle_name}")
             return None
         
-        print(f"\n📊 Araç: {vehicle_name}")
-        print(f"  • Güç/Ağırlık: {vehicle_capability['power_weight_ratio']} HP/ton")
-        print(f"  • Rahat eğim: %{vehicle_capability['comfortable_slope']}")
-        print(f"  • Zorlu eğim: %{vehicle_capability['manageable_slope']}")
-        print(f"  • Maksimum: %{vehicle_capability['maximum_slope']}")
+        # print(f"\n📊 Araç: {vehicle_name}")
+        # print(f"  • Güç/Ağırlık: {vehicle_capability['power_weight_ratio']} HP/ton")
+        # print(f"  • Rahat eğim: %{vehicle_capability['comfortable_slope']}")
+        # print(f"  • Zorlu eğim: %{vehicle_capability['manageable_slope']}")
+        # print(f"  • Maksimum: %{vehicle_capability['maximum_slope']}")
         
         # En yakın düğümleri bul
         start_node = self.find_closest_node(*start_gps)
@@ -449,12 +455,14 @@ class EnhancedRoutingEngine:
         """İki düğüm arasındaki eğimi hesapla"""
         from_node = self.nodes.get(str(from_node_id), {})
         to_node = self.nodes.get(str(to_node_id), {})
-        
+
+        # print(f"from_node: {from_node} ve to_node: {to_node}")
+
         # Yükseklikler (yoksa varsayılan değer kullan)
         from_elevation = from_node.get('elevation', 50)
         to_elevation = to_node.get('elevation', 50)
         elevation_change = to_elevation - from_elevation
-        # print(f"elevation_change: {elevation_change}")
+        print(f"elevation_change: {elevation_change}")
         gps = from_node.get('gps', [])            
         from_node_lat = gps[0] if len(gps) >= 2 else 0      
         from_node_lon = gps[1] if len(gps) >= 2 else 0
@@ -588,14 +596,24 @@ class EnhancedRoutingEngine:
         start_node = str(start_node)
         end_node = str(end_node)
         
+        # DEBUG: Bitiş noktasını detaylı kontrol et
+        print(f"  DEBUG: end_node = {end_node}")
+        print(f"  DEBUG: end_node'a gelen kenar var mı? {end_node in self.incoming_edges}")
+        if end_node in self.incoming_edges:
+            incoming_count = len(self.incoming_edges[end_node])
+            print(f"  DEBUG: end_node'a {incoming_count} kenar geliyor")
+            if incoming_count > 0:
+                print(f"  DEBUG: Gelen kenarların kaynak düğümleri:")
+                for edge in self.incoming_edges[end_node][:5]:  # İlk 5'ini göster
+                    print(f"    - {edge['from']}")
+        else:
+            print(f"  ⚠️ SORUN: end_node'a hiç gelen kenar yok!")
+        
         # DEBUG: Başlangıç durumunu kontrol et
         print(f"  DEBUG: start_node = {start_node}")
-        print(f"  DEBUG: start_node in outgoing_edges? {start_node in self.outgoing_edges}")
+        print(f"  DEBUG: start_node'dan çıkan kenar var mı? {start_node in self.outgoing_edges}")
         if start_node in self.outgoing_edges:
             print(f"  DEBUG: Komşu sayısı: {len(self.outgoing_edges[start_node])}")
-        else:
-            print(f"  DEBUG: SORUN! start_node için hiç komşu yok!")
-            print(f"  DEBUG: outgoing_edges keys örneği: {list(self.outgoing_edges.keys())[:5]}")
         
         # Priority queue
         open_set = [(0, start_node, [start_node])]
@@ -603,8 +621,8 @@ class EnhancedRoutingEngine:
         g_costs = {start_node: 0}
         
         iteration = 0
-        max_iterations = 50000  # Artırıldı
-        # DEBUG: Hangi düğümleri ziyaret ettik?
+        max_iterations = 50000
+        
         visited_nodes = set()
         
         print(f"  İterasyon başlıyor... (maks {max_iterations})")
@@ -613,9 +631,8 @@ class EnhancedRoutingEngine:
             iteration += 1
             
             if iteration % 1000 == 0:
-                print(f"  İterasyon {iteration}...")
+                print(f"  İterasyon {iteration}... (ziyaret edilen: {len(visited_nodes)} düğüm)")
             
-            # En düşük maliyetli düğümü al
             current_f, current_node, current_path = heapq.heappop(open_set)
             
             if current_node == end_node:
@@ -627,90 +644,52 @@ class EnhancedRoutingEngine:
             
             closed_set.add(current_node)
             visited_nodes.add(current_node)
-
-            # Komşuları kontrol et
-            passable_neighbors = 0
-            blocked_neighbors = 0
             
-            # DEBUG: İlk iterasyonda komşu durumunu göster
-            edges_for_current = self.outgoing_edges.get(current_node, [])
-            if iteration == 1:
-                print(f"  DEBUG: İlk node ({current_node}) için {len(edges_for_current)} komşu bulundu")
-        
-            # Komşuları kontrol et
-            neighbors = self.outgoing_edges.get(current_node, [])
-            
-            # DEBUG: İlk iterasyonda komşu durumunu göster
-            if iteration == 1:
-                print(f"  DEBUG: İlk node ({current_node}) için {len(neighbors)} komşu bulundu")
-            
-            # Komşuları kontrol et
             for edge in self.outgoing_edges.get(current_node, []):
                 neighbor = str(edge['to'])
                 
                 if neighbor in closed_set:
                     continue
                 
-                # Kenar maliyeti
                 edge_cost_info = self.calculate_edge_cost(
                     edge, vehicle_capability, time_of_day, mode
                 )
                 
-                # Başlangıç ve bitiş noktalarından çıkış/giriş için eğim kontrolünü gevşet
                 is_start_edge = (current_node == start_node)
                 is_end_edge = (neighbor == end_node)
                 
-                # Geçilemez mi?
                 if not edge_cost_info['passable'] and not (is_start_edge or is_end_edge):
-                    blocked_neighbors += 1
                     continue
                 
-                passable_neighbors += 1
-                
-                # Eğer başlangıç veya bitiş kenarıysa ve geçilemezse, yüksek ceza ver
                 cost_multiplier = 1.0
                 if (is_start_edge or is_end_edge) and not edge_cost_info['passable']:
                     cost_multiplier = 3.0
                 
-                # Geçilemez mi?
-                if not edge_cost_info['passable']:
-                    continue
-                
-                # Yeni maliyet
                 tentative_g = g_costs[current_node] + (edge_cost_info['total_cost'] * cost_multiplier)
-                # tentative_g = g_costs[current_node] + edge_cost_info['total_cost']
                 
                 if neighbor not in g_costs or tentative_g < g_costs[neighbor]:
                     g_costs[neighbor] = tentative_g
                     
-                    # Heuristik
                     h_cost = self.calculate_heuristic(neighbor, end_node)
                     f_cost = tentative_g + h_cost
                     
                     new_path = current_path + [neighbor]
                     heapq.heappush(open_set, (f_cost, neighbor, new_path))
-
-            # İlk 5 iterasyonda detay göster
-            if iteration <= 5:
-                print(f"  DEBUG iter {iteration}: node={current_node}, geçilebilir={passable_neighbors}, engellenmiş={blocked_neighbors}")
         
         print(f"  ❌ Rota bulunamadı ({iteration} iterasyon)")
         print(f"  DEBUG: Toplam {len(visited_nodes)} farklı düğüm ziyaret edildi")
-        print(f"  DEBUG: Hedef düğüme ulaşılamadı")
-        # Hedefe en yakın ziyaret edilen düğümü bul
-        closest_to_end = None
-        min_dist_to_end = float('inf')
-        for node in visited_nodes:
-            dist = self.calculate_heuristic(node, end_node)
-            if dist < min_dist_to_end:
-                min_dist_to_end = dist
-                closest_to_end = node
         
-        print(f"  DEBUG: Hedefe en yakın ulaşılan düğüm: {closest_to_end} (mesafe: {min_dist_to_end:.0f}m)")
-
+        # Eğer end_node'a gelen kenarlar varsa, onları ziyaret ettik mi?
+        if end_node in self.incoming_edges:
+            incoming_sources = {str(edge['from']) for edge in self.incoming_edges[end_node]}
+            visited_incoming = incoming_sources.intersection(visited_nodes)
+            print(f"  DEBUG: end_node'a gelen {len(incoming_sources)} kaynaktan {len(visited_incoming)} tanesini ziyaret ettik")
+            if len(visited_incoming) == 0:
+                print(f"  ⚠️ SORUN: Hedefe giden hiçbir düğüme ulaşamadık! Yol ağı bağlantısız.")
+        
         return None
-    
-    
+        
+        
     def calculate_heuristic(self, from_node_id, to_node_id):
         """A* için heuristik"""
         from_node = self.nodes.get(str(from_node_id), {})

@@ -12,6 +12,10 @@ from datetime import datetime
 import json
 import base64
 from io import BytesIO
+import warnings
+
+# tight_layout uyarısını sustur
+warnings.filterwarnings('ignore', message='This figure includes Axes that are not compatible with tight_layout')
 
 
 class EnhancedVisualization:
@@ -66,10 +70,9 @@ class EnhancedVisualization:
         
         for node_id in path:
             node = nodes.get(node_id, {})
-            lat = node.get('lat')
-            lon = node.get('lon')
-            if lat and lon:
-                coordinates.append([lat, lon])
+            gps = node.get('gps', [])
+            if len(gps) >= 2:
+                coordinates.append([gps[0], gps[1]])
         
         if not coordinates:
             return None
@@ -94,9 +97,15 @@ class EnhancedVisualization:
             from_node = nodes.get(segment['from'], {})
             to_node = nodes.get(segment['to'], {})
             
+            from_gps = from_node.get('gps', [])
+            to_gps = to_node.get('gps', [])
+            
+            if len(from_gps) < 2 or len(to_gps) < 2:
+                continue
+            
             seg_coords = [
-                [from_node.get('lat'), from_node.get('lon')],
-                [to_node.get('lat'), to_node.get('lon')]
+                [from_gps[0], from_gps[1]],
+                [to_gps[0], to_gps[1]]
             ]
             
             # Renk ve stil
@@ -303,11 +312,13 @@ class EnhancedVisualization:
             slope = abs(segment.get('slope', 0))
             if slope >= manageable_slope:
                 from_node = nodes.get(segment['from'], {})
-                critical_points.append({
-                    'lat': from_node.get('lat'),
-                    'lon': from_node.get('lon'),
-                    'slope': segment['slope']
-                })
+                from_gps = from_node.get('gps', [])
+                if len(from_gps) >= 2:
+                    critical_points.append({
+                        'lat': from_gps[0],
+                        'lon': from_gps[1],
+                        'slope': segment['slope']
+                    })
         
         return critical_points
     
@@ -344,9 +355,9 @@ class EnhancedVisualization:
             slopes.append(segment.get('slope', 0))
             colors.append(self.slope_colors.get(segment.get('difficulty', 'easy')))
         
-        # Grafik oluştur
-        fig = plt.figure(figsize=(14, 8))
-        gs = GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+        # Grafik oluştur - DÜZELTME: constrained_layout kullan
+        fig = plt.figure(figsize=(14, 8), constrained_layout=True)
+        gs = GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3, figure=fig)
         
         # 1. Yükseklik Profili
         ax1 = fig.add_subplot(gs[0])
@@ -451,7 +462,7 @@ class EnhancedVisualization:
             fontsize=11, y=0.98
         )
         
-        plt.tight_layout()
+        # DÜZELTME: tight_layout kaldırıldı - constrained_layout kullanıldı
         return fig
     
     

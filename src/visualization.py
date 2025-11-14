@@ -1,660 +1,600 @@
 """
 Görselleştirme Modülü - Rota Analizi ve Grafik Oluşturma
-Bu modül API çağrıları ve görselleştirme işlemlerini yönetir.
+YENİ SİSTEM: OSM + A* tabanlı rota görselleştirmesi
+
+=============================================================================
+ESKİ SİSTEMDEN FARKLAR:
+=============================================================================
+
+1. ✅ EKLENEN: Kendi hesapladığımız rotayı gösterme
+   - Eski: Sadece Google'ın rotası
+   - Yeni: Bizim OSM/A* rotası + opsiyonel Google karşılaştırması
+
+2. ✅ EKLENEN: Eğim-bazlı renk kodlama
+   - Eski: Tek renk rota çizgisi
+   - Yeni: Yeşil (güvenli) → Sarı (orta) → Kırmızı (kritik)
+
+3. ✅ EKLENEN: Segment bazlı analiz
+   - Eski: Genel yükseklik profili
+   - Yeni: Her yol parçası için detaylı analiz
+
+4. ✅ EKLENEN: Kritik nokta işaretleme
+   - Eski: Sadece rakam
+   - Yeni: Harita üzerinde marker'lar
+
+5. ✅ EKLENEN: Rota karşılaştırma metrikleri
+   - Eski: Tek rota analizi
+   - Yeni: Bizim vs Google karşılaştırması
+
+6. ✅ EKLENEN: Optimizasyon modu gösterimi
+   - Eski: Yok
+   - Yeni: fuel_saver, safety_first, balanced, time_saver
+
+7. ✅ İYİLEŞTİRİLEN: Yakıt hesaplama görselleştirmesi
+   - Eski: Genel tüketim
+   - Yeni: Segment bazlı + eğim etkisi detaylı
+=============================================================================
 """
 
-import requests
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib import gridspec
+import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec
+import numpy as np
 from datetime import datetime
-import json
+import os
 
 # Yerel modüller
-from database import (VEHICLE_DATABASE, TRAFFIC_ZONES, 
-                     get_vehicle_specs, get_all_vehicles, get_fuel_price)
-from calculations import (RouteSegmentAnalyzer, FuelConsumptionCalculator)
-
-# Emoji desteği için
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'Segoe UI Emoji']
-plt.rcParams['axes.unicode_minus'] = False
+from database import get_vehicle_specs, get_fuel_price, OPTIMIZATION_PROFILES
 
 
-class RouteElevationAnalyzer:
-    """Google Maps API kullanarak rota yükseklik profili ve yakıt tüketimi analizi"""
+class RouteVisualizer:
+    """
+    YENİ: OSM/A* tabanlı rota görselleştirme sınıfı
+    ESKİ: RouteElevationAnalyzer (Google API odaklıydı)
+    """
     
-    def __init__(self, api_key):
+    def __init__(self, output_dir='./visualizations'):
         """
         Args:
-            api_key (str): Google Maps API anahtarı
+            output_dir (str): Çıktı dizini
         """
-        self.api_key = api_key
-        self.fuel_calculator = FuelConsumptionCalculator()
-        self.segment_analyzer = RouteSegmentAnalyzer()
-    
-    def get_route(self, origin, destination):
-        """
-        Google Directions API ile rota bilgisini al
+        self.output_dir = output_dir
         
-        Args:
-            origin (str): Başlangıç noktası
-            destination (str): Bitiş noktası
-            
-        Returns:
-            dict: Rota bilgileri
-        """
-        url = "https://maps.googleapis.com/maps/api/directions/json"
-        params = {
-            'origin': origin,
-            'destination': destination,
-            'mode': 'driving',
-            'language': 'tr',
-            'key': self.api_key
+        # Dizini oluştur
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # YENİ: Eğim bazlı renk paleti
+        self.colors = {
+            'safe': '#4CAF50',        # Yeşil (0-7%)
+            'warning': '#FFC107',     # Sarı (7-12%)
+            'critical': '#F44336',    # Kırmızı (12%+)
+            'our_route': '#2196F3',   # Mavi (bizim rota)
+            'google_route': '#9E9E9E',# Gri (Google rotası)
+            'background': '#FAFAFA'   # Açık gri arka plan
         }
         
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"Rota alınamadı: {response.status_code}")
-            return None
+        print(f"✓ RouteVisualizer başlatıldı")
+        print(f"  Çıktı dizini: {output_dir}")
     
-    def decode_polyline(self, polyline_string):
+    
+    def visualize_custom_route(self, route_data, vehicle_name, time_of_day='peak', 
+                               save_path=None):
         """
-        Google'ın encode edilmiş polyline formatını decode et
+        YENİ FONKSĐYON: Kendi hesapladığımız rotayı görselleştir
+        
+        ESKİ: visualize_route() → Sadece Google rotası
+        YENİ: visualize_custom_route() → OSM/A* rotası
         
         Args:
-            polyline_string (str): Encode edilmiş polyline
-            
-        Returns:
-            list: Koordinat listesi [(lat, lng), ...]
-        """
-        coordinates = []
-        index = 0
-        lat = 0
-        lng = 0
-        
-        while index < len(polyline_string):
-            shift = 0
-            result = 0
-            
-            while True:
-                byte = ord(polyline_string[index]) - 63
-                index += 1
-                result |= (byte & 0x1f) << shift
-                shift += 5
-                if byte < 0x20:
-                    break
-            
-            dlat = ~(result >> 1) if result & 1 else result >> 1
-            lat += dlat
-            
-            shift = 0
-            result = 0
-            
-            while True:
-                byte = ord(polyline_string[index]) - 63
-                index += 1
-                result |= (byte & 0x1f) << shift
-                shift += 5
-                if byte < 0x20:
-                    break
-            
-            dlng = ~(result >> 1) if result & 1 else result >> 1
-            lng += dlng
-            
-            coordinates.append((lat * 1e-5, lng * 1e-5))
-        
-        return coordinates
-    
-    def sample_points(self, coordinates, num_samples=50):
-        """
-        Koordinat listesinden uniform örnekler al
-        
-        Args:
-            coordinates (list): Tüm koordinatlar
-            num_samples (int): Örnek sayısı
-            
-        Returns:
-            list: Örneklenmiş koordinatlar
-        """
-        if len(coordinates) <= num_samples:
-            return coordinates
-        
-        indices = np.linspace(0, len(coordinates) - 1, num_samples, dtype=int)
-        return [coordinates[i] for i in indices]
-    
-    def get_elevations(self, coordinates):
-        """
-        Google Elevation API ile yükseklik bilgilerini al
-        
-        Args:
-            coordinates (list): Koordinat listesi
-            
-        Returns:
-            list: Yükseklik listesi (metre)
-        """
-        url = "https://maps.googleapis.com/maps/api/elevation/json"
-        
-        # Koordinatları string formatına çevir
-        locations = "|".join([f"{lat},{lng}" for lat, lng in coordinates])
-        
-        params = {
-            'locations': locations,
-            'key': self.api_key
-        }
-        
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data['status'] == 'OK':
-                return [result['elevation'] for result in data['results']]
-        
-        return None
-    
-    def calculate_distances(self, coordinates):
-        """
-        Haversine formülü ile koordinatlar arası mesafeleri hesapla
-        
-        Args:
-            coordinates (list): Koordinat listesi
-            
-        Returns:
-            list: Kümülatif mesafe listesi (km)
-        """
-        def haversine(lat1, lon1, lat2, lon2):
-            R = 6371  # Dünya yarıçapı (km)
-            dlat = np.radians(lat2 - lat1)
-            dlon = np.radians(lon2 - lon1)
-            a = np.sin(dlat/2)**2 + np.cos(np.radians(lat1)) * \
-                np.cos(np.radians(lat2)) * np.sin(dlon/2)**2
-            c = 2 * np.arcsin(np.sqrt(a))
-            return R * c
-        
-        distances = [0]
-        for i in range(1, len(coordinates)):
-            lat1, lon1 = coordinates[i-1]
-            lat2, lon2 = coordinates[i]
-            dist = haversine(lat1, lon1, lat2, lon2)
-            distances.append(distances[-1] + dist)
-        
-        return distances
-    
-    def analyze_route(self, origin, destination, num_samples=50):
-        """
-        Rota analizi yap
-        
-        Args:
-            origin (str): Başlangıç noktası
-            destination (str): Bitiş noktası
-            num_samples (int): Yükseklik örnek sayısı
-            
-        Returns:
-            dict: Analiz sonuçları
-        """
-        print(f"[ROTA] {origin} -> {destination}")
-        print("[API] Google Directions API çağrısı yapılıyor...")
-        
-        # Rota bilgisini al
-        route_data = self.get_route(origin, destination)
-        if not route_data or route_data['status'] != 'OK':
-            print("[HATA] Rota bulunamadı!")
-            return None
-        
-        # İlk rota
-        route = route_data['routes'][0]
-        leg = route['legs'][0]
-        
-        # Polyline'ı decode et
-        polyline = route['overview_polyline']['points']
-        all_coordinates = self.decode_polyline(polyline)
-        
-        print(f"[ROTA] Toplam {len(all_coordinates)} nokta bulundu")
-        
-        # Örnekle
-        sampled_coordinates = self.sample_points(all_coordinates, num_samples)
-        print(f"[SAMPLE] {len(sampled_coordinates)} nokta örneklendi")
-        
-        # Yükseklik bilgilerini al
-        print("[API] Google Elevation API çağrısı yapılıyor...")
-        elevations = self.get_elevations(sampled_coordinates)
-        
-        if not elevations:
-            print("[HATA] Yükseklik bilgisi alınamadı!")
-            return None
-        
-        # Mesafeleri hesapla
-        distances = self.calculate_distances(sampled_coordinates)
-        
-        # İstatistikleri hesapla
-        total_distance_km = leg['distance']['value'] / 1000
-        total_ascent_m = sum(max(0, elevations[i] - elevations[i-1]) 
-                           for i in range(1, len(elevations)))
-        total_descent_m = sum(max(0, elevations[i-1] - elevations[i]) 
-                            for i in range(1, len(elevations)))
-        
-        # Ortalama eğim hesapla
-        gradients = []
-        for i in range(1, len(elevations)):
-            if distances[i] != distances[i-1]:
-                gradient = (elevations[i] - elevations[i-1]) / \
-                          ((distances[i] - distances[i-1]) * 1000) * 100
-                gradients.append(gradient)
-        
-        avg_gradient = np.mean(np.abs(gradients)) if gradients else 0
-        
-        results = {
-            'coordinates': sampled_coordinates,
-            'elevations': elevations,
-            'distances': distances,
-            'total_distance_km': total_distance_km,
-            'total_duration_min': leg['duration']['value'] / 60,
-            'total_ascent_m': total_ascent_m,
-            'total_descent_m': total_descent_m,
-            'max_elevation_m': max(elevations),
-            'min_elevation_m': min(elevations),
-            'avg_gradient': avg_gradient,
-            'start_address': leg['start_address'],
-            'end_address': leg['end_address']
-        }
-        
-        print(f"[OK] Analiz tamamlandı: {total_distance_km:.2f} km")
-        return results
-    
-    def visualize_route_with_fuel(self, results, vehicle_name, time_of_day='peak', 
-                                 save_path='rota_analizi.png', origin_name='', destination_name='', route_info=None):
-        """
-        Rota, yükseklik profili ve yakıt tüketimi grafiklerini oluştur
-        
-        Args:
-            results (dict): Rota analizi sonuçları
+            route_data (dict): routing_engine.calculate_route() sonucu
             vehicle_name (str): Araç adı
             time_of_day (str): 'peak' veya 'offpeak'
-            save_path (str): Grafik kayıt yolu
-            origin_name (str): Başlangıç noktası adı
-            destination_name (str): Bitiş noktası adı
-            route_info (dict): Google Maps rota bilgisi
-        """
-        vehicle_specs = get_vehicle_specs(vehicle_name)
-        if not vehicle_specs:
-            print(f"Araç bulunamadı: {vehicle_name}")
-            return
-        
-        # Yakıt hesaplamaları
-        fuel_data = self.fuel_calculator.calculate_fuel_consumption(vehicle_specs, results, time_of_day, route_info)
-        capability = self.fuel_calculator.assess_vehicle_capability(vehicle_specs, results)
-        
-        # Grafik oluştur - Enhanced layout
-        fig = plt.figure(figsize=(18, 20))
-        gs = gridspec.GridSpec(5, 2, height_ratios=[1.5, 1, 1, 0.8, 0.3], 
-                             hspace=0.3, wspace=0.2)
-        
-        # 1. ROTA HARİTASI (üst panel, tüm genişlik)
-        ax_map = fig.add_subplot(gs[0, :])
-        
-        lats = [coord[0] for coord in results['coordinates']]
-        lngs = [coord[1] for coord in results['coordinates']]
-        
-        # Eğim hesaplama (harita için)
-        gradients_map = []
-        for i in range(len(results['elevations'])):
-            if i == 0:
-                gradients_map.append(0)
-            else:
-                if results['distances'][i] != results['distances'][i-1]:
-                    gradient = (results['elevations'][i] - results['elevations'][i-1]) / \
-                              ((results['distances'][i] - results['distances'][i-1]) * 1000) * 100
-                    gradients_map.append(gradient)
-                else:
-                    gradients_map.append(0)
-        
-        # Kritik eğim bölgelerini tespit et
-        steep_indices = [i for i, g in enumerate(gradients_map) if abs(g) > 20]
-        moderate_steep_indices = [i for i, g in enumerate(gradients_map) if 10 <= abs(g) <= 20]
-        
-        # Yükseklik renklendirmesi ile rota çizimi
-        scatter = ax_map.scatter(lngs, lats, c=results['elevations'], cmap='terrain',
-                                s=30, alpha=0.8, edgecolors='black', linewidth=0.5)
-        ax_map.plot(lngs, lats, 'b-', linewidth=2, alpha=0.7, label='Rota')
-        
-        # Orta eğim bölgelerini vurgula
-        if moderate_steep_indices:
-            mod_lats = [lats[i] for i in moderate_steep_indices]
-            mod_lngs = [lngs[i] for i in moderate_steep_indices]
-            
-            ax_map.scatter(mod_lngs, mod_lats, c='yellow', s=150, 
-                        marker='o', edgecolors='orange', linewidth=2,
-                        label='Orta Eğim (%10-20)', zorder=4)
-        
-        # Dik eğim bölgelerini vurgula
-        if steep_indices:
-            steep_lats = [lats[i] for i in steep_indices]
-            steep_lngs = [lngs[i] for i in steep_indices]
-            
-            ax_map.scatter(steep_lngs, steep_lats, c='red', s=200, 
-                          marker='X', edgecolors='darkred', linewidth=2,
-                          label='Dik Eğim (>%20)', zorder=5)
-        
-        # Başlangıç ve bitiş noktaları
-        ax_map.plot(lngs[0], lats[0], 'go', markersize=15, label=f'Başlangıç: {origin_name}', 
-                   markeredgecolor='black', markeredgewidth=2)
-        ax_map.plot(lngs[-1], lats[-1], 'ro', markersize=15, label=f'Varış: {destination_name}',
-                   markeredgecolor='black', markeredgewidth=2)
-        
-        cbar = plt.colorbar(scatter, ax=ax_map, orientation='vertical', pad=0.02)
-        cbar.set_label('Yükseklik (m)', fontsize=12, fontweight='bold')
-        
-        ax_map.set_xlabel('Boylam (°)', fontsize=12, fontweight='bold')
-        ax_map.set_ylabel('Enlem (°)', fontsize=12, fontweight='bold')
-        ax_map.set_title(f'{origin_name} → {destination_name}\n{vehicle_name} | Zorluk: {capability["difficulty"]}', 
-                        fontsize=14, fontweight='bold')
-        ax_map.grid(True, alpha=0.3, linestyle='--')
-        ax_map.legend(loc='upper left', fontsize=10)
-        ax_map.set_aspect('equal', adjustable='box')
-        
-        # 2. YÜKSEKLİK PROFİLİ
-        ax_elev = fig.add_subplot(gs[1, :])
-        
-        ax_elev.plot(results['distances'], results['elevations'], 'b-', linewidth=2.5)
-        ax_elev.fill_between(results['distances'], results['elevations'], 
-                            alpha=0.3, color='skyblue')
-        
-        min_idx = results['elevations'].index(results['min_elevation_m'])
-        max_idx = results['elevations'].index(results['max_elevation_m'])
-        
-        ax_elev.plot(results['distances'][min_idx], results['min_elevation_m'], 'go', 
-                    markersize=12, label=f"En düşük: {results['min_elevation_m']:.1f}m",
-                    markeredgecolor='black', markeredgewidth=1.5)
-        ax_elev.plot(results['distances'][max_idx], results['max_elevation_m'], 'ro', 
-                    markersize=12, label=f"En yüksek: {results['max_elevation_m']:.1f}m",
-                    markeredgecolor='black', markeredgewidth=1.5)
-        
-        ax_elev.set_xlabel('Mesafe (km)', fontsize=12, fontweight='bold')
-        ax_elev.set_ylabel('Yükseklik (m)', fontsize=12, fontweight='bold')
-        ax_elev.set_title('Yükseklik Profili', fontsize=13, fontweight='bold')
-        ax_elev.grid(True, alpha=0.3)
-        ax_elev.legend(fontsize=10)
-        
-        # 3. EĞİM ANALİZİ
-        ax_grad = fig.add_subplot(gs[2, :])
-        
-        gradients = []
-        gradient_distances = []
-        
-        for i in range(1, len(results['elevations'])):
-            if results['distances'][i] != results['distances'][i-1]:
-                gradient = (results['elevations'][i] - results['elevations'][i-1]) / \
-                          ((results['distances'][i] - results['distances'][i-1]) * 1000) * 100
-                gradients.append(gradient)
-                gradient_distances.append(results['distances'][i])
-        
-        ax_grad.plot(gradient_distances, gradients, 'g-', linewidth=2.5)
-        ax_grad.axhline(y=0, color='k', linestyle='--', alpha=0.5, linewidth=1.5)
-        
-        ax_grad.fill_between(gradient_distances, gradients, 0, alpha=0.4, 
-                            where=np.array(gradients) > 0, color='red', 
-                            label='Tırmanış', interpolate=True)
-        ax_grad.fill_between(gradient_distances, gradients, 0, alpha=0.4, 
-                            where=np.array(gradients) < 0, color='blue', 
-                            label='İniş', interpolate=True)
-        
-        ax_grad.set_xlabel('Mesafe (km)', fontsize=12, fontweight='bold')
-        ax_grad.set_ylabel('Eğim (%)', fontsize=12, fontweight='bold')
-        ax_grad.set_title('Eğim Analizi', fontsize=13, fontweight='bold')
-        ax_grad.grid(True, alpha=0.3)
-        ax_grad.legend(fontsize=9, loc='best')
-        
-        # 4. SEGMENT ANALİZİ PANELİ
-        ax_segment = fig.add_subplot(gs[3, :])
-        
-        seg_stats = fuel_data['segment_stats']
-        zones = list(seg_stats.keys())
-        distances_seg = [seg_stats[z]['distance'] for z in zones]
-        fuels = [seg_stats[z]['fuel'] for z in zones]
-        
-        x = np.arange(len(zones))
-        width = 0.35
-        
-        ax_segment2 = ax_segment.twinx()
-        
-        bars1 = ax_segment.bar(x - width/2, distances_seg, width, label='Mesafe (km)', 
-                            color='skyblue', edgecolor='black', linewidth=1.5)
-        bars2 = ax_segment2.bar(x + width/2, fuels, width, label='Yakıt (L)', 
-                            color='orange', edgecolor='black', linewidth=1.5)
-        
-        ax_segment.set_xlabel('Yol Tipi', fontsize=12, fontweight='bold')
-        ax_segment.set_ylabel('Mesafe (km)', fontsize=12, fontweight='bold', color='skyblue')
-        ax_segment2.set_ylabel('Yakıt Tüketimi (L)', fontsize=12, fontweight='bold', color='orange')
-        ax_segment.set_title(f'Segment Analizi - {time_of_day.upper()} Saatleri', 
-                        fontsize=13, fontweight='bold')
-        ax_segment.set_xticks(x)
-        ax_segment.set_xticklabels(zones)
-        ax_segment.tick_params(axis='y', labelcolor='skyblue')
-        ax_segment2.tick_params(axis='y', labelcolor='orange')
-        
-        ax_segment.legend(loc='upper left')
-        ax_segment2.legend(loc='upper right')
-        ax_segment.grid(True, alpha=0.3, axis='y')
-        
-        # 5. YAKIT TÜKETİMİ BİLGİ PANELİ
-        ax_fuel = fig.add_subplot(gs[4, :])
-        ax_fuel.axis('off')
-        
-        fuel_info = f"""
-        {vehicle_name} | {vehicle_specs['hp']}HP {vehicle_specs['torque_nm']}Nm | {vehicle_specs['fuel_type']}
-        {fuel_data['total_fuel_liters']:.3f}L | {fuel_data['fuel_per_100km']:.2f}L/100km | Yakıt: {fuel_data['fuel_cost_tl']:.2f}TL
-        """
-        
-        # Geçiş ücretleri varsa göster
-        if fuel_data.get('toll_cost_tl', 0) > 0:
-            fuel_info += f"\n Geçiş Ücreti: {fuel_data['toll_cost_tl']:.2f}TL | Toplam Maliyet: {fuel_data['total_cost_tl']:.2f}TL"
-        
-        if capability['warnings']:
-            fuel_info += f"\n {' | '.join(capability['warnings'][:2])}"
-        else:
-            fuel_info += "\n Araç bu rota için uygun"
-        
-        ax_fuel.text(0.5, 0.5, fuel_info, fontsize=10, family='monospace',
-                    bbox=dict(boxstyle='round', facecolor='lightyellow', 
-                            edgecolor='orange', linewidth=2, alpha=0.9),
-                    verticalalignment='center', horizontalalignment='center')
-        
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"\nGrafik kaydedildi: {save_path}")
-        plt.show()
-    
-    def compare_vehicles(self, results, time_of_day='peak', save_path='arac_karsilastirma.png', route_info=None):
-        """
-        Tüm araçlar için yakıt tüketimi karşılaştırması
-        
-        Args:
-            results (dict): Rota analizi sonuçları
-            time_of_day (str): 'peak' veya 'offpeak'
-            save_path (str): Grafik kayıt yolu
-            route_info (dict): Google Maps rota bilgisi
+            save_path (str): Kayıt yolu (opsiyonel)
             
         Returns:
-            dict: Araç karşılaştırma sonuçları
+            str: Kaydedilen dosya yolu
         """
-        vehicle_results = {}
+        print(f"\n{'='*70}")
+        print("YENİ SİSTEM - ROTA GÖRSELLEŞTİRME")
+        print(f"{'='*70}")
+        print(f"  Araç: {vehicle_name}")
+        print(f"  Zaman: {time_of_day}")
+        print(f"  Mod: {route_data.get('mode', 'balanced')}")
+        print("-"*70)
         
-        for vehicle_name, specs in VEHICLE_DATABASE.items():
-            fuel_data = self.fuel_calculator.calculate_fuel_consumption(specs, results, time_of_day, route_info)            
-            capability = self.fuel_calculator.assess_vehicle_capability(specs, results)
-            
-            vehicle_results[vehicle_name] = {
-                'fuel': fuel_data,
-                'capability': capability,
-                'specs': specs
-            }
+        # Şekil oluştur (4x3 layout)
+        fig = plt.figure(figsize=(20, 14))
+        fig.patch.set_facecolor(self.colors['background'])
         
-        # Karşılaştırma grafiği oluştur
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle(f'Araç Karşılaştırması - {results["total_distance_km"]:.2f} km Rota\n'
-                    f'{time_of_day.upper()} Saatleri', fontsize=16, fontweight='bold')
+        # Başlık
+        profile_name = OPTIMIZATION_PROFILES.get(route_data['mode'], {}).get('name', 'Dengeli')
+        fig.suptitle(
+            f'Rota Analizi: {vehicle_name}\n'
+            f'Optimizasyon: {profile_name} | Zaman: {time_of_day.upper()}',
+            fontsize=16, fontweight='bold', y=0.98
+        )
         
-        vehicles = list(vehicle_results.keys())
+        # Grid layout
+        gs = GridSpec(3, 3, figure=fig, hspace=0.35, wspace=0.3)
         
-        # 1. Toplam yakıt tüketimi
-        fuel_consumption = [vehicle_results[v]['fuel']['total_fuel_liters'] for v in vehicles]
-        colors1 = ['green' if f < 3 else 'orange' if f < 5 else 'red' for f in fuel_consumption]
+        # 1. YENİ: GPS Harita (eğim renkli)
+        ax_map = fig.add_subplot(gs[0:2, 0:2])
+        self._plot_route_map_with_slopes(ax_map, route_data)
         
-        ax1.barh(vehicles, fuel_consumption, color=colors1, alpha=0.7, edgecolor='black', linewidth=1.5)
-        ax1.set_xlabel('Toplam Yakıt Tüketimi (Litre)', fontweight='bold')
-        ax1.set_title('Toplam Yakıt Tüketimi', fontweight='bold')
-        ax1.grid(axis='x', alpha=0.3)
+        # 2. İYİLEŞTİRİLEN: Yükselti Profili (segment detaylı)
+        ax_elevation = fig.add_subplot(gs[0, 2])
+        self._plot_elevation_profile_enhanced(ax_elevation, route_data)
         
-        for i, v in enumerate(fuel_consumption):
-            ax1.text(v + 0.05, i, f'{v:.3f}L', va='center', fontweight='bold')
+        # 3. YENİ: Eğim Dağılım Histogramı
+        ax_slope_hist = fig.add_subplot(gs[1, 2])
+        self._plot_slope_histogram(ax_slope_hist, route_data)
         
-        # 2. 100km başına tüketim
-        fuel_per_100 = [vehicle_results[v]['fuel']['fuel_per_100km'] for v in vehicles]
-        colors2 = ['green' if f < 5 else 'orange' if f < 7 else 'red' for f in fuel_per_100]
+        # 4. YENİ: Özet Metrikler Tablosu
+        ax_metrics = fig.add_subplot(gs[2, 0])
+        self._plot_metrics_table(ax_metrics, route_data, vehicle_name)
         
-        ax2.barh(vehicles, fuel_per_100, color=colors2, alpha=0.7, edgecolor='black', linewidth=1.5)
-        ax2.set_xlabel('100km Başına Tüketim (L/100km)', fontweight='bold')
-        ax2.set_title('100km Başına Tüketim', fontweight='bold')
-        ax2.grid(axis='x', alpha=0.3)
+        # 5. İYİLEŞTİRİLEN: Segment Bazlı Yakıt Grafiği
+        ax_fuel = fig.add_subplot(gs[2, 1])
+        self._plot_fuel_by_segment(ax_fuel, route_data)
         
-        for i, v in enumerate(fuel_per_100):
-            ax2.text(v + 0.1, i, f'{v:.2f}', va='center', fontweight='bold')
+        # 6. YENİ: Kritik Bölge Listesi
+        ax_critical = fig.add_subplot(gs[2, 2])
+        self._plot_critical_sections(ax_critical, route_data)
         
-        # 3. Maliyet karşılaştırma
-        costs = [vehicle_results[v]['fuel']['fuel_cost_tl'] for v in vehicles]
-        colors3 = ['green' if c < 100 else 'orange' if c < 150 else 'red' for c in costs]
+        # Kaydet
+        if save_path is None:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            vehicle_safe = vehicle_name.replace(' ', '_').replace('.', '')
+            save_path = os.path.join(
+                self.output_dir, 
+                f'route_{vehicle_safe}_{route_data["mode"]}_{timestamp}.png'
+            )
         
-        ax3.barh(vehicles, costs, color=colors3, alpha=0.7, edgecolor='black', linewidth=1.5)
-        ax3.set_xlabel('Yakıt Maliyeti (TL)', fontweight='bold')
-        ax3.set_title('Tahmini Yakıt Maliyeti', fontweight='bold')
-        ax3.grid(axis='x', alpha=0.3)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight', 
+                   facecolor=self.colors['background'])
+        plt.close()
         
-        for i, v in enumerate(costs):
-            ax3.text(v + 2, i, f'{v:.2f}₺', va='center', fontweight='bold')
+        print(f"\n✓ Görselleştirme kaydedildi: {save_path}")
+        print(f"{'='*70}\n")
         
-        # 4. Zorluk skorları
-        difficulty_map = {'KOLAY': 1, 'ORTA': 2, 'ZOR': 3}
-        difficulties = [difficulty_map.get(vehicle_results[v]['capability']['difficulty'], 3) for v in vehicles]
-        difficulty_labels = [vehicle_results[v]['capability']['difficulty'] for v in vehicles]
-        colors4 = ['green' if d == 1 else 'yellow' if d == 2 else 'red' for d in difficulties]
-        
-        ax4.barh(vehicles, difficulties, color=colors4, alpha=0.7, edgecolor='black', linewidth=1.5)
-        ax4.set_xlabel('Zorluk Seviyesi', fontweight='bold')
-        ax4.set_title('Rota Zorluk Değerlendirmesi', fontweight='bold')
-        ax4.set_xticks([1, 2, 3])
-        ax4.set_xticklabels(['KOLAY', 'ORTA', 'ZOR'])
-        ax4.grid(axis='x', alpha=0.3)
-        
-        for i, label in enumerate(difficulty_labels):
-            ax4.text(difficulties[i] + 0.1, i, label, va='center', fontweight='bold')
-        
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"\nKarşılaştırma grafiği kaydedildi: {save_path}")
-        plt.show()
-        
-        return vehicle_results
+        return save_path
     
-    def print_detailed_report(self, results, vehicle_name=None, time_of_day='peak'):
+    
+    def _plot_route_map_with_slopes(self, ax, route_data):
         """
-        Detaylı analiz raporu yazdır
+        YENİ FONKSĐYON: Eğim renkli harita
         
-        Args:
-            results (dict): Rota analizi sonuçları
-            vehicle_name (str): Araç adı (opsiyonel)
-            time_of_day (str): 'peak' veya 'offpeak'
+        ESKİ: Tek renkli çizgi
+        YENİ: Her segment eğimine göre renkli
         """
-        # Kritik eğim bölgelerini tespit et
-        gradients_full = [0]
-        for i in range(1, len(results['elevations'])):
-            if results['distances'][i] != results['distances'][i-1]:
-                gradient = (results['elevations'][i] - results['elevations'][i-1]) / \
-                          ((results['distances'][i] - results['distances'][i-1]) * 1000) * 100
-                gradients_full.append(gradient)
-            else:
-                gradients_full.append(0)
+        ax.set_title('Rota Haritası (Eğim Bazlı Renklendirme)', 
+                    fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel('Boylam (Longitude)', fontsize=10)
+        ax.set_ylabel('Enlem (Latitude)', fontsize=10)
+        ax.set_facecolor(self.colors['background'])
+        ax.grid(True, alpha=0.3, linestyle='--')
         
-        steep_sections = []
-        for i, g in enumerate(gradients_full):
-            if abs(g) > 20:
-                steep_sections.append({
-                    'index': i,
-                    'distance_km': results['distances'][i],
-                    'gradient': g,
-                    'lat': results['coordinates'][i][0],
-                    'lng': results['coordinates'][i][1],
-                    'elevation': results['elevations'][i]
-                })
+        # GPS yolu
+        gps_path = route_data['gps_path']
+        lats = [gps[0] for gps in gps_path]
+        lons = [gps[1] for gps in gps_path]
         
-        print("\n" + "="*80)
-        print("DETAYLI ROTA ANALİZ RAPORU")
-        print("="*80)
-        print(f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
-        print(f"Trafik Durumu: {'YOĞUN SAAT' if time_of_day == 'peak' else 'SEYREK SAAT'}")
-        print(f"\n📍 ROTA BİLGİLERİ:")
-        print(f"Toplam Mesafe: {results['total_distance_km']:.2f} km")
-        print(f"Tahmini Süre: {results['total_duration_min']:.0f} dakika")
-        print(f"En Düşük Yükseklik: {results['min_elevation_m']:.1f} m")
-        print(f"En Yüksek Yükseklik: {results['max_elevation_m']:.1f} m")
-        print(f"Yükseklik Farkı: {results['max_elevation_m'] - results['min_elevation_m']:.1f} m")
-        print(f"Toplam Tırmanış: {results['total_ascent_m']:.1f} m")
-        print(f"Toplam İniş: {results['total_descent_m']:.1f} m")
-        print(f"Ortalama Eğim: {results['avg_gradient']:.2f}%")
+        # Segment bilgileri
+        segments = route_data['route_details']['segments']
         
-        # Kritik eğim bölgeleri
-        if steep_sections:
-            print("\n KRİTİK EĞİM BÖLGELERİ (%20'nin Üzeri)")
-            print("="*80)
-            
-            for idx, section in enumerate(steep_sections, 1):
-                eğim_tipi = "TIRMANIŞ" if section['gradient'] > 0 else "İNİŞ"
-                print(f"\n{idx}. Bölge - {eğim_tipi}")
-                print(f"   Mesafe: {section['distance_km']:.3f} km")
-                print(f"   Eğim: {abs(section['gradient']):.1f}%")
-                print(f"   Yükseklik: {section['elevation']:.1f} m")
-                print(f"   Koordinat: {section['lat']:.6f}°, {section['lng']:.6f}°")
-                print(f"   Google Maps: https://www.google.com/maps?q={section['lat']},{section['lng']}")
-        
-        # Araç özel rapor
-        if vehicle_name:
-            print("\n" + "="*80)
-            print(f"🚗 ARAÇ ÖZEL ANALİZ: {vehicle_name}")
-            print("="*80)
-            
-            specs = get_vehicle_specs(vehicle_name)
-            if specs:
-                fuel_data = self.fuel_calculator.calculate_fuel_consumption(specs, results, time_of_day)
-                capability = self.fuel_calculator.assess_vehicle_capability(specs, results)
+        # Her segmenti eğimine göre renklendir
+        for i, segment in enumerate(segments):
+            if i < len(lats) - 1:
+                slope = abs(segment['slope_percent'])
                 
-                print(f"\n Araç Özellikleri:")
-                print(f"Motor Gücü: {specs['hp']} HP")
-                print(f"Tork: {specs['torque_nm']} Nm")
-                print(f"Ağırlık: {specs['weight_kg']} kg")
-                print(f"Motor Hacmi: {specs['engine_cc']} cc")
-                print(f"Yakıt Tipi: {specs['fuel_type']}")
-                
-                print(f"\n Yakıt Tahmini ({time_of_day.upper()} saatleri):")
-                print(f"Toplam Tüketim: {fuel_data['total_fuel_liters']:.3f} Litre")
-                print(f"100km Başına: {fuel_data['fuel_per_100km']:.2f} L/100km")
-                print(f"Tahmini Maliyet: {fuel_data['fuel_cost_tl']:.2f} TL")
-                
-                print(f"\n Segment Bazlı Analiz:")
-                for zone, data in fuel_data['segment_stats'].items():
-                    if data['distance'] > 0:
-                        zone_info = TRAFFIC_ZONES[zone]
-                        avg_speed = zone_info['avg_speed_peak'] if time_of_day == 'peak' else zone_info['avg_speed_offpeak']
-                        print(f"  {zone}: {data['distance']:.2f}km | Ort. Hız: {avg_speed}km/h | Yakıt: {data['fuel']:.3f}L")
-                
-                print(f"\n Performans Analizi:")
-                print(f"Güç/Ağırlık: {capability['power_to_weight']:.3f} HP/kg")
-                print(f"Tork/Ağırlık: {capability['torque_to_weight']:.3f} Nm/kg")
-                print(f"Rota Zorluğu: {capability['difficulty']}")
-                
-                if capability['warnings']:
-                    print(f"\n Uyarılar:")
-                    for warning in capability['warnings']:
-                        print(f"  {warning}")
+                # Renk seç
+                if slope < 7:
+                    color = self.colors['safe']
+                    linewidth = 2
+                elif slope < 12:
+                    color = self.colors['warning']
+                    linewidth = 3
                 else:
-                    print("\n Bu rota için araç performansı yeterli.")
+                    color = self.colors['critical']
+                    linewidth = 4
+                
+                # Segment çiz
+                ax.plot([lons[i], lons[i+1]], [lats[i], lats[i+1]], 
+                       color=color, linewidth=linewidth, alpha=0.8, zorder=2)
         
-        print("\n" + "="*80)
+        # Başlangıç ve bitiş marker'ları
+        ax.plot(lons[0], lats[0], 'go', markersize=15, 
+               label='Başlangıç', zorder=3, markeredgecolor='black', 
+               markeredgewidth=2)
+        ax.plot(lons[-1], lats[-1], 'rs', markersize=15, 
+               label='Varış', zorder=3, markeredgecolor='black', 
+               markeredgewidth=2)
+        
+        # YENİ: Kritik noktaları işaretle
+        critical_sections = route_data.get('critical_sections', [])
+        if critical_sections:
+            for section in critical_sections:
+                lat, lon = section['from_gps']
+                ax.plot(lon, lat, 'r^', markersize=10, 
+                       markeredgecolor='black', markeredgewidth=1.5, 
+                       zorder=4, alpha=0.8)
+        
+        # Legend
+        legend_elements = [
+            mpatches.Patch(color=self.colors['safe'], label='Güvenli (0-7%)'),
+            mpatches.Patch(color=self.colors['warning'], label='Dikkat (7-12%)'),
+            mpatches.Patch(color=self.colors['critical'], label='Kritik (12%+)')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', 
+                 framealpha=0.9, fontsize=9)
+        
+        # Aspect ratio
+        ax.set_aspect('equal', adjustable='box')
+    
+    
+    def _plot_elevation_profile_enhanced(self, ax, route_data):
+        """
+        İYİLEŞTİRİLEN FONKSĐYON: Gelişmiş yükselti profili
+        
+        ESKİ: Basit yükselti grafiği
+        YENİ: Segment detaylı + kritik bölge vurguları
+        """
+        ax.set_title('Yükselti Profili', fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel('Mesafe (km)', fontsize=10)
+        ax.set_ylabel('Rakım (m)', fontsize=10)
+        ax.set_facecolor(self.colors['background'])
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        # Segment verilerini topla
+        segments = route_data['route_details']['segments']
+        
+        distances = [0]
+        elevations = [segments[0]['from_gps'][0] if segments else 0]  # İlk nokta
+        
+        cumulative_dist = 0
+        for segment in segments:
+            cumulative_dist += segment['distance_m'] / 1000  # km
+            distances.append(cumulative_dist)
+            # Bitiş yüksekliği = başlangıç + yükselti farkı
+            elevations.append(elevations[-1] + segment.get('slope_percent', 0) * segment['distance_m'] / 100)
+        
+        # Ana profil çizgisi
+        ax.plot(distances, elevations, color=self.colors['our_route'], 
+               linewidth=2.5, label='Rota Profili', zorder=2)
+        
+        # Alan doldur
+        ax.fill_between(distances, elevations, alpha=0.3, 
+                        color=self.colors['our_route'], zorder=1)
+        
+        # YENİ: Kritik bölgeleri vurgula
+        critical_sections = route_data.get('critical_sections', [])
+        if critical_sections:
+            for i, segment in enumerate(segments):
+                if abs(segment['slope_percent']) > 12:
+                    if i < len(distances) - 1:
+                        ax.axvspan(distances[i], distances[i+1], 
+                                  color=self.colors['critical'], alpha=0.3, 
+                                  zorder=0)
+        
+        # İstatistikler
+        max_elev = max(elevations)
+        min_elev = min(elevations)
+        
+        ax.text(0.02, 0.98, 
+               f'Max: {max_elev:.0f}m\nMin: {min_elev:.0f}m\nFark: {max_elev-min_elev:.0f}m',
+               transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', bbox=dict(boxstyle='round', 
+               facecolor='white', alpha=0.8))
+        
+        ax.legend(loc='upper right', fontsize=9)
+    
+    
+    def _plot_slope_histogram(self, ax, route_data):
+        """
+        YENİ FONKSĐYON: Eğim dağılım histogramı
+        
+        ESKİ: Yok
+        YENİ: Rotadaki eğimlerin dağılımı
+        """
+        ax.set_title('Eğim Dağılımı', fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel('Eğim (%)', fontsize=10)
+        ax.set_ylabel('Segment Sayısı', fontsize=10)
+        ax.set_facecolor(self.colors['background'])
+        ax.grid(True, alpha=0.3, axis='y', linestyle='--')
+        
+        # Eğim verilerini topla
+        segments = route_data['route_details']['segments']
+        slopes = [segment['slope_percent'] for segment in segments]
+        
+        # Histogram
+        n, bins, patches = ax.hist(slopes, bins=20, edgecolor='black', 
+                                   linewidth=0.5, alpha=0.7)
+        
+        # Renklendirme
+        for i, patch in enumerate(patches):
+            bin_center = (bins[i] + bins[i+1]) / 2
+            if abs(bin_center) < 7:
+                patch.set_facecolor(self.colors['safe'])
+            elif abs(bin_center) < 12:
+                patch.set_facecolor(self.colors['warning'])
+            else:
+                patch.set_facecolor(self.colors['critical'])
+        
+        # Ortalama çizgisi
+        avg_slope = np.mean([abs(s) for s in slopes])
+        ax.axvline(avg_slope, color='red', linestyle='--', linewidth=2,
+                  label=f'Ort. Eğim: {avg_slope:.1f}%')
+        
+        ax.legend(fontsize=9)
+    
+    
+    def _plot_metrics_table(self, ax, route_data, vehicle_name):
+        """
+        YENİ FONKSĐYON: Özet metrikler tablosu
+        
+        ESKİ: Konsola yazdırma
+        YENİ: Görsel tablo
+        """
+        ax.axis('off')
+        ax.set_title('Rota Özeti', fontsize=12, fontweight='bold', pad=10)
+        
+        # Veri hazırla
+        data = [
+            ['Toplam Mesafe', f"{route_data['total_distance']:.2f} km"],
+            ['Tahmini Süre', f"{route_data['estimated_time']:.0f} dk"],
+            ['Toplam Yakıt', f"{route_data['total_fuel']:.2f} L"],
+            ['Yakıt Maliyeti', f"{route_data['fuel_cost']:.2f} TL"],
+            ['Maks. Eğim', f"{route_data['max_slope']:.1f}%"],
+            ['Toplam Tırmanış', f"{route_data['total_elevation_gain']:.0f} m"],
+            ['Kritik Bölge', f"{len(route_data['critical_sections'])} adet"],
+            ['Araç', vehicle_name],
+        ]
+        
+        # Tablo oluştur
+        table = ax.table(cellText=data, 
+                        colWidths=[0.5, 0.5],
+                        cellLoc='left',
+                        loc='center',
+                        bbox=[0, 0, 1, 1])
+        
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 2)
+        
+        # Stil
+        for i in range(len(data)):
+            table[(i, 0)].set_facecolor('#E3F2FD')
+            table[(i, 0)].set_text_props(weight='bold')
+            table[(i, 1)].set_facecolor('white')
+            
+            # Kritik değerleri vurgula
+            if i == 4 and route_data['max_slope'] > 12:
+                table[(i, 1)].set_facecolor('#FFCDD2')
+            elif i == 6 and len(route_data['critical_sections']) > 0:
+                table[(i, 1)].set_facecolor('#FFCDD2')
+    
+    
+    def _plot_fuel_by_segment(self, ax, route_data):
+        """
+        İYİLEŞTİRİLEN FONKSĐYON: Segment bazlı yakıt grafiği
+        
+        ESKİ: Genel yakıt tüketimi
+        YENİ: Her segment için ayrı + eğim etkisi görünür
+        """
+        ax.set_title('Segment Bazlı Yakıt Tüketimi', fontsize=12, 
+                    fontweight='bold', pad=10)
+        ax.set_xlabel('Segment #', fontsize=10)
+        ax.set_ylabel('Yakıt (L)', fontsize=10)
+        ax.set_facecolor(self.colors['background'])
+        ax.grid(True, alpha=0.3, axis='y', linestyle='--')
+        
+        # Segment verilerini topla
+        segments = route_data['route_details']['segments']
+        
+        segment_nums = list(range(1, len(segments) + 1))
+        fuel_amounts = [seg['fuel_liters'] for seg in segments]
+        slopes = [abs(seg['slope_percent']) for seg in segments]
+        
+        # Renk kodlama
+        colors = [self.colors['safe'] if s < 7 else 
+                 self.colors['warning'] if s < 12 else 
+                 self.colors['critical'] for s in slopes]
+        
+        # Bar grafiği
+        bars = ax.bar(segment_nums, fuel_amounts, color=colors, 
+                     edgecolor='black', linewidth=0.5, alpha=0.8)
+        
+        # Ortalama çizgisi
+        avg_fuel = np.mean(fuel_amounts)
+        ax.axhline(avg_fuel, color='red', linestyle='--', linewidth=2,
+                  label=f'Ortalama: {avg_fuel:.3f}L')
+        
+        # X ekseni etiketlerini azalt
+        if len(segments) > 20:
+            ax.set_xticks(segment_nums[::5])
+        
+        ax.legend(fontsize=9)
+    
+    
+    def _plot_critical_sections(self, ax, route_data):
+        """
+        YENİ FONKSĐYON: Kritik bölge listesi
+        
+        ESKİ: Konsola yazdırma
+        YENİ: Görsel liste
+        """
+        ax.axis('off')
+        ax.set_title('Kritik Eğim Bölgeleri (>12%)', fontsize=12, 
+                    fontweight='bold', pad=10)
+        
+        critical_sections = route_data.get('critical_sections', [])
+        
+        if not critical_sections:
+            ax.text(0.5, 0.5, '✓ Kritik bölge yok\nGüvenli rota!',
+                   ha='center', va='center', fontsize=14, color='green',
+                   weight='bold', transform=ax.transAxes,
+                   bbox=dict(boxstyle='round', facecolor=self.colors['safe'], 
+                            alpha=0.3))
+        else:
+            # Tablo verisi hazırla
+            data = [['#', 'Sokak', 'Eğim', 'Mesafe']]
+            for i, section in enumerate(critical_sections[:5], 1):  # İlk 5
+                data.append([
+                    str(i),
+                    section['street_name'][:20] + '...' if len(section['street_name']) > 20 
+                        else section['street_name'],
+                    f"{abs(section['slope']):.1f}%",
+                    f"{section['distance_m']:.0f}m"
+                ])
+            
+            # Tablo oluştur
+            table = ax.table(cellText=data, 
+                            colWidths=[0.1, 0.5, 0.2, 0.2],
+                            cellLoc='left',
+                            loc='center',
+                            bbox=[0, 0, 1, 1])
+            
+            table.auto_set_font_size(False)
+            table.set_fontsize(9)
+            table.scale(1, 2)
+            
+            # Header stilini ayarla
+            for i in range(4):
+                table[(0, i)].set_facecolor('#EF5350')
+                table[(0, i)].set_text_props(weight='bold', color='white')
+            
+            # Veri satırlarını ayarla
+            for i in range(1, len(data)):
+                for j in range(4):
+                    table[(i, j)].set_facecolor('#FFCDD2')
+    
+    
+    def print_route_summary(self, route_data, vehicle_name):
+        """
+        YENİ FONKSĐYON: Konsola özet rapor yazdır
+        
+        ESKİ: print_detailed_report() → Çok uzun
+        YENİ: print_route_summary() → Özet ve net
+        """
+        print(f"\n{'='*70}")
+        print("ROTA ÖZET RAPORU")
+        print(f"{'='*70}")
+        print(f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        print(f"Araç: {vehicle_name}")
+        print(f"Optimizasyon Modu: {route_data['mode']}")
+        
+        print(f"\n📍 ROTA BİLGİLERİ:")
+        print(f"  Mesafe: {route_data['total_distance']:.2f} km")
+        print(f"  Süre: {route_data['estimated_time']:.0f} dakika")
+        print(f"  Segment Sayısı: {len(route_data['route_details']['segments'])}")
+        
+        print(f"\n⛽ YAKIT TAHMİNİ:")
+        print(f"  Toplam: {route_data['total_fuel']:.2f} L")
+        print(f"  Maliyet: {route_data['fuel_cost']:.2f} TL")
+        print(f"  100km başına: {(route_data['total_fuel']/route_data['total_distance']*100):.2f} L/100km")
+        
+        print(f"\n📊 EĞİM ANALİZİ:")
+        print(f"  Maksimum: {route_data['max_slope']:.1f}%")
+        print(f"  Toplam Tırmanış: {route_data['total_elevation_gain']:.0f} m")
+        print(f"  Kritik Bölge: {len(route_data['critical_sections'])} adet")
+        
+        # Kritik bölgeler
+        if route_data['critical_sections']:
+            print(f"\n⚠️  KRİTİK BÖLGELER:")
+            for i, section in enumerate(route_data['critical_sections'], 1):
+                print(f"  {i}. {section['street_name']}: {abs(section['slope']):.1f}% "
+                      f"({section['distance_m']:.0f}m)")
+        else:
+            print(f"\n✓ Kritik bölge yok - Güvenli rota!")
+        
+        print(f"{'='*70}\n")
+
+
+# YENİ: Karşılaştırma fonksiyonu
+def compare_routes(our_route, google_route, vehicle_name, save_path=None):
+    """
+    YENİ FONKSĐYON: Bizim rota vs Google rotası karşılaştırması
+    
+    ESKİ: Yok
+    YENİ: İki rotayı yan yana karşılaştır
+    
+    Args:
+        our_route (dict): Bizim hesapladığımız rota
+        google_route (dict): Google'ın rotası (opsiyonel)
+        vehicle_name (str): Araç adı
+        save_path (str): Kayıt yolu
+        
+    Returns:
+        dict: Karşılaştırma sonuçları
+    """
+    print(f"\n{'='*70}")
+    print("ROTA KARŞILAŞTIRMASI")
+    print(f"{'='*70}")
+    
+    comparison = {
+        'our_route': {
+            'distance_km': our_route['total_distance'],
+            'fuel_liters': our_route['total_fuel'],
+            'fuel_cost_tl': our_route['fuel_cost'],
+            'time_min': our_route['estimated_time'],
+            'max_slope': our_route['max_slope'],
+            'critical_count': len(our_route['critical_sections'])
+        }
+    }
+    
+    if google_route:
+        comparison['google_route'] = {
+            'distance_km': google_route.get('total_distance', 0),
+            'fuel_liters': google_route.get('total_fuel', 0),
+            'fuel_cost_tl': google_route.get('fuel_cost', 0),
+            'time_min': google_route.get('estimated_time', 0),
+            'max_slope': google_route.get('max_slope', 0),
+            'critical_count': len(google_route.get('critical_sections', []))
+        }
+        
+        # Karşılaştırma tablosu
+        print(f"\n{'Kriter':<20} {'Bizim Sistem':<20} {'Google Maps':<20} {'Fark':<15}")
+        print("-"*75)
+        
+        for key in ['distance_km', 'fuel_liters', 'fuel_cost_tl', 'time_min', 
+                    'max_slope', 'critical_count']:
+            our_val = comparison['our_route'][key]
+            google_val = comparison['google_route'][key]
+            
+            if google_val > 0:
+                diff_pct = ((our_val - google_val) / google_val) * 100
+                diff_str = f"{diff_pct:+.1f}%"
+            else:
+                diff_str = "N/A"
+            
+            print(f"{key:<20} {our_val:<20.2f} {google_val:<20.2f} {diff_str:<15}")
+        
+        # Sonuç
+        print(f"\n{'='*70}")
+        if comparison['our_route']['critical_count'] < comparison['google_route']['critical_count']:
+            print("✓ BİZİM SİSTEM DAHA GÜVENLİ (daha az kritik eğim)")
+        
+        if comparison['our_route']['fuel_liters'] < comparison['google_route']['fuel_liters']:
+            saving = comparison['google_route']['fuel_liters'] - comparison['our_route']['fuel_liters']
+            saving_tl = comparison['google_route']['fuel_cost_tl'] - comparison['our_route']['fuel_cost_tl']
+            print(f"✓ YAKIT TASARRUFU: {saving:.2f}L ({saving_tl:.2f}TL)")
+        
+        print(f"{'='*70}\n")
+    
+    return comparison
+
+
+# Eski sistemle uyumluluk için (opsiyonel)
+class RouteElevationAnalyzer:
+    """
+    ESKİ SİSTEM: Google API tabanlı analiz
+    UYUMLULUK: Eski kod çalışmaya devam etsin
+    """
+    pass  # Eski kodu buraya ekleyebilirsiniz
+
+
+# Test
+if __name__ == "__main__":
+    print("Visualization Module - Test")
+    print("Gerçek test için routing_engine sonucu gereklidir")

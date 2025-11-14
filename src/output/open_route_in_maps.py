@@ -54,7 +54,7 @@ def main():
     if len(sys.argv) > 1:
         json_file = sys.argv[1]
     else:
-        json_file = 'route_Fiat_Egea_13_Multijet_data_20251102_135750.json'
+        json_file = 'route_Fiat_Egea_13_Multijet_data_20251112_141306.json'
     
     print(f"JSON dosyası okunuyor: {json_file}")
     
