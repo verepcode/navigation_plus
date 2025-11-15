@@ -545,13 +545,14 @@ class EnhancedRoutingEngine:
     def calculate_edge_cost(self, edge, vehicle_capability, time_of_day='offpeak', mode='balanced'):
         """Kenar maliyeti hesapla"""
         # Temel özellikler
-        distance = edge.get('distance', 100)
-        base_speed = edge.get('speed_limit', 50)
+        distance = edge.get('distance', 100)  # metre
+        base_speed = edge.get('speed_limit', 50)  # km/saat
         
         # Eğim hesapla
         slope_info = self.calculate_slope(edge['from'], edge['to'])
         slope_percent = slope_info['slope_percent']
         slope_category = slope_info['category']
+        abs_slope = abs(slope_percent)
         
         # Araç limitleri
         comfortable_slope = vehicle_capability['comfortable_slope']
@@ -559,35 +560,45 @@ class EnhancedRoutingEngine:
         maximum_slope = vehicle_capability['maximum_slope']
         
         # Eğim penaltısı
-        abs_slope = abs(slope_percent)
-        # print(f"slope is: {abs_slope}")
         if abs_slope <= comfortable_slope:
             slope_penalty = 1.0
             passable = True
             difficulty_level = 'comfortable'
+            speed_factor = 1.0  # Normal hız
         elif abs_slope <= manageable_slope:
             slope_penalty = 1.5 + (abs_slope - comfortable_slope) * 0.1
             passable = True
             difficulty_level = 'manageable'
+            speed_factor = 0.5  # ← DEĞİŞTİ: 0.8 → 0.7
         elif abs_slope <= maximum_slope:
             slope_penalty = 2.5 + (abs_slope - manageable_slope) * 0.2
             passable = True
             difficulty_level = 'difficult'
+            speed_factor = 0.25  # ← DEĞİŞTİ: 0.6 → 0.5
         else:
+            # ← YENİ BLOK: Maksimumun üzerindeki eğimler
+            excess_slope = abs_slope - maximum_slope
             slope_penalty = float('inf')
             passable = False
             difficulty_level = 'impassable'
+            speed_factor = max(0.15, 0.25 - (excess_slope / 200))
         
         # Yakıt tüketimi
         fuel_multiplier = vehicle_capability['fuel_multipliers'].get(slope_category, 1.0)
         base_consumption = vehicle_capability.get('fuel_consumption_city', 6.0) / 100
         fuel_consumption = base_consumption * (distance / 1000) * fuel_multiplier
         
+        # EĞİME GÖRE DÜZELTILMIŞ HIZ
+        effective_speed = base_speed * speed_factor
+        effective_speed = max(effective_speed, 5)  # Minimum 5 km/saat
+        
+        # Zaman hesabı (düzeltilmiş hız ile)
+        time_minutes = (distance / 1000) / effective_speed * 60
+        
         # Toplam maliyet
         if not passable:
             total_cost = float('inf')
         else:
-            time_cost = (distance / (base_speed * 1000 / 3600))
             fuel_cost = fuel_consumption * 35
             slope_cost = slope_penalty * 10
             
@@ -599,7 +610,7 @@ class EnhancedRoutingEngine:
             
             total_cost = (
                 weights['fuel'] * fuel_cost +
-                weights['time'] * time_cost * 60 +
+                weights['time'] * time_minutes +
                 weights['slope'] * slope_cost
             )
         
@@ -608,7 +619,7 @@ class EnhancedRoutingEngine:
             'distance': distance,
             'fuel_consumption': round(fuel_consumption, 3),
             'fuel_cost': round(fuel_consumption * 35, 2),
-            'time_minutes': round((distance / (base_speed * 1000 / 3600)) * 60, 1),
+            'time_minutes': round(time_minutes, 1),
             'slope_info': slope_info,
             'passable': passable,
             'difficulty_level': difficulty_level,
