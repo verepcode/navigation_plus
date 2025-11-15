@@ -408,33 +408,59 @@ class EnhancedRoutingEngine:
     
     
     def find_closest_node(self, lat, lon):
-        """En yakın yol düğümünü bul - geliştirilmiş"""
+        """En yakın ve EN BAĞLANTILI yol düğümünü bul"""
         if not lat or not lon:
             print(f"⚠️ Geçersiz koordinat: {lat}, {lon}")
             return None
-            
-        min_distance = float('inf')
-        closest_node = None
-        print(f"Burada")
+        
+        candidates = []
+        
         for node_id, node_data in self.nodes.items():
             gps = node_data.get('gps', [0, 0])
-            elevation = node_data.get('elevation', 50)
-            # print(f"elevation: {elevation}")
             node_lat = gps[0] if len(gps) > 0 else 0
             node_lon = gps[1] if len(gps) > 1 else 0
             if not node_lat or not node_lon:
                 continue
             
             distance = self.haversine_distance(lat, lon, node_lat, node_lon)
-            # print(f"distance {distance:.0f}m ")
-            if distance < min_distance:
-                min_distance = distance
-                closest_node = str(node_id)  # String olarak kaydet
+            
+            # 1 km içindeki düğümleri değerlendir
+            if distance < 200:
+                # Bağlantı skoru: outgoing + incoming kenar sayısı
+                outgoing_count = len(self.outgoing_edges.get(str(node_id), []))
+                incoming_count = len(self.incoming_edges.get(str(node_id), []))
+                connection_score = outgoing_count + incoming_count
+                
+                candidates.append({
+                    'node_id': str(node_id),
+                    'distance': distance,
+                    'outgoing': outgoing_count,
+                    'incoming': incoming_count,
+                    'connection_score': connection_score
+                })
         
-        if min_distance > 500:  # 500 metreden uzaksa
-            print(f"⚠️ En yakın düğüm {min_distance:.0f}m uzakta!")
+        if not candidates:
+            print(f"⚠️ 1km içinde düğüm bulunamadı!")
+            return None
         
-        return closest_node
+        # SKOR HESAPLAMA: Mesafe + Bağlantı
+        # Her 10m uzaklık = -1 puan
+        # Her bağlantı = +100 puan
+        for c in candidates:
+            c['total_score'] = c['connection_score'] * 100 - (c['distance'] / 10)
+        
+        # En yüksek skora göre sırala
+        candidates.sort(key=lambda x: x['total_score'], reverse=True)
+        
+        best = candidates[0]
+        
+        print(f"  ✓ En iyi düğüm seçildi:")
+        print(f"    Node: {best['node_id']}")
+        print(f"    Mesafe: {best['distance']:.0f}m")
+        print(f"    Bağlantılar: {best['outgoing']} çıkış, {best['incoming']} giriş")
+        print(f"    Skor: {best['total_score']:.0f}")
+        
+        return best['node_id']
     
     
     def haversine_distance(self, lat1, lon1, lat2, lon2):
@@ -462,7 +488,7 @@ class EnhancedRoutingEngine:
         from_elevation = from_node.get('elevation', 50)
         to_elevation = to_node.get('elevation', 50)
         elevation_change = to_elevation - from_elevation
-        print(f"elevation_change: {elevation_change}")
+        # print(f"elevation_change: {elevation_change}")
         gps = from_node.get('gps', [])            
         from_node_lat = gps[0] if len(gps) >= 2 else 0      
         from_node_lon = gps[1] if len(gps) >= 2 else 0
@@ -591,105 +617,156 @@ class EnhancedRoutingEngine:
     
     
     def a_star_search(self, start_node, end_node, vehicle_capability, time_of_day, mode):
-        """A* algoritması - geliştirilmiş hata kontrolü"""
-        # String'e çevir
+        """Çift yönlü A* - İleri yön eğimsiz, geri yön eğimli"""
         start_node = str(start_node)
         end_node = str(end_node)
         
-        # DEBUG: Bitiş noktasını detaylı kontrol et
-        print(f"  DEBUG: end_node = {end_node}")
-        print(f"  DEBUG: end_node'a gelen kenar var mı? {end_node in self.incoming_edges}")
-        if end_node in self.incoming_edges:
-            incoming_count = len(self.incoming_edges[end_node])
-            print(f"  DEBUG: end_node'a {incoming_count} kenar geliyor")
-            if incoming_count > 0:
-                print(f"  DEBUG: Gelen kenarların kaynak düğümleri:")
-                for edge in self.incoming_edges[end_node][:5]:  # İlk 5'ini göster
-                    print(f"    - {edge['from']}")
-        else:
-            print(f"  ⚠️ SORUN: end_node'a hiç gelen kenar yok!")
+        # Sadece geri yön için gevşetilmiş limitler
+        backward_relaxed = vehicle_capability.copy()
+        backward_relaxed['comfortable_slope'] = vehicle_capability['comfortable_slope'] * 1.4
+        backward_relaxed['manageable_slope'] = vehicle_capability['manageable_slope'] * 1.4
+        backward_relaxed['maximum_slope'] = vehicle_capability['maximum_slope'] * 1.4
         
-        # DEBUG: Başlangıç durumunu kontrol et
-        print(f"  DEBUG: start_node = {start_node}")
-        print(f"  DEBUG: start_node'dan çıkan kenar var mı? {start_node in self.outgoing_edges}")
-        if start_node in self.outgoing_edges:
-            print(f"  DEBUG: Komşu sayısı: {len(self.outgoing_edges[start_node])}")
+        # İLERİ YÖN
+        forward_open = [(0, start_node, [start_node])]
+        forward_closed = set()
+        forward_g_costs = {start_node: 0}
+        forward_parents = {start_node: (None, [start_node])}
         
-        # Priority queue
-        open_set = [(0, start_node, [start_node])]
-        closed_set = set()
-        g_costs = {start_node: 0}
+        # GERİ YÖN
+        backward_open = [(0, end_node, [end_node])]
+        backward_closed = set()
+        backward_g_costs = {end_node: 0}
+        backward_parents = {end_node: (None, [end_node])}
         
         iteration = 0
         max_iterations = 50000
         
-        visited_nodes = set()
+        forward_iterations = 0
+        backward_iterations = 0
         
-        print(f"  İterasyon başlıyor... (maks {max_iterations})")
+        print(f"  Çift yönlü arama başlıyor... (maks {max_iterations})")
+        print(f"  ⚠️ İleri yön: Eğim kontrolü YOK (keşif modu)")
+        print(f"  ⚠️ Geri yön: Gevşetilmiş eğim kontrolü (%40)")
         
-        while open_set and iteration < max_iterations:
+        while (forward_open or backward_open) and iteration < max_iterations:
             iteration += 1
             
-            if iteration % 1000 == 0:
-                print(f"  İterasyon {iteration}... (ziyaret edilen: {len(visited_nodes)} düğüm)")
+            if iteration % 500 == 0:
+                print(f"  İterasyon {iteration}:")
+                print(f"    İleri: {len(forward_closed)} closed, {len(forward_open)} open")
+                print(f"    Geri: {len(backward_closed)} closed, {len(backward_open)} open")
             
-            current_f, current_node, current_path = heapq.heappop(open_set)
-            
-            if current_node == end_node:
-                print(f"  ✓ Hedef bulundu! ({iteration} iterasyon)")
-                return current_path
-            
-            if current_node in closed_set:
-                continue
-            
-            closed_set.add(current_node)
-            visited_nodes.add(current_node)
-            
-            for edge in self.outgoing_edges.get(current_node, []):
-                neighbor = str(edge['to'])
+            # İLERİ YÖN - EĞİM KONTROLSUZ
+            if forward_open:
+                forward_iterations += 1
+                current_f, current_node, current_path = heapq.heappop(forward_open)
                 
-                if neighbor in closed_set:
-                    continue
-                
-                edge_cost_info = self.calculate_edge_cost(
-                    edge, vehicle_capability, time_of_day, mode
-                )
-                
-                is_start_edge = (current_node == start_node)
-                is_end_edge = (neighbor == end_node)
-                
-                if not edge_cost_info['passable'] and not (is_start_edge or is_end_edge):
-                    continue
-                
-                cost_multiplier = 1.0
-                if (is_start_edge or is_end_edge) and not edge_cost_info['passable']:
-                    cost_multiplier = 3.0
-                
-                tentative_g = g_costs[current_node] + (edge_cost_info['total_cost'] * cost_multiplier)
-                
-                if neighbor not in g_costs or tentative_g < g_costs[neighbor]:
-                    g_costs[neighbor] = tentative_g
+                if current_node in backward_closed:
+                    print(f"  ✅ KESİŞME BULUNDU! ({iteration} iterasyon)")
+                    print(f"     Kesişme düğümü: {current_node}")
                     
-                    h_cost = self.calculate_heuristic(neighbor, end_node)
-                    f_cost = tentative_g + h_cost
+                    full_path = self._merge_bidirectional_paths(
+                        current_node, forward_parents, backward_parents
+                    )
                     
-                    new_path = current_path + [neighbor]
-                    heapq.heappush(open_set, (f_cost, neighbor, new_path))
+                    # SADECE PATH DÖNDÜR - analyze_route zaten kontrol edecek
+                    return full_path
+                
+                if current_node not in forward_closed:
+                    forward_closed.add(current_node)
+                    
+                    for edge in self.outgoing_edges.get(current_node, []):
+                        neighbor = str(edge['to'])
+                        
+                        if neighbor in forward_closed:
+                            continue
+                        
+                        distance = edge.get('distance', 100)
+                        tentative_g = forward_g_costs[current_node] + distance
+                        
+                        if neighbor not in forward_g_costs or tentative_g < forward_g_costs[neighbor]:
+                            forward_g_costs[neighbor] = tentative_g
+                            forward_parents[neighbor] = (current_node, current_path + [neighbor])
+                            
+                            h_cost = self.calculate_heuristic(neighbor, end_node)
+                            f_cost = tentative_g + h_cost
+                            
+                            new_path = current_path + [neighbor]
+                            heapq.heappush(forward_open, (f_cost, neighbor, new_path))
+            
+            # GERİ YÖN - GEVŞETİLMİŞ EĞİM KONTROLÜ
+            if backward_open:
+                backward_iterations += 1
+                current_f, current_node, current_path = heapq.heappop(backward_open)
+                
+                if current_node in forward_closed:
+                    print(f"  ✅ KESİŞME BULUNDU! ({iteration} iterasyon)")
+                    print(f"     Kesişme düğümü: {current_node}")
+                    
+                    full_path = self._merge_bidirectional_paths(
+                        current_node, forward_parents, backward_parents
+                    )
+                    
+                    # SADECE PATH DÖNDÜR - analyze_route zaten kontrol edecek
+                    return full_path
+                
+                if current_node not in backward_closed:
+                    backward_closed.add(current_node)
+                    
+                    for edge in self.incoming_edges.get(current_node, []):
+                        neighbor = str(edge['from'])
+                        
+                        if neighbor in backward_closed:
+                            continue
+                        
+                        edge_cost_info = self.calculate_edge_cost(
+                            edge, backward_relaxed, time_of_day, mode
+                        )
+                        
+                        is_end_edge = (current_node == end_node)
+                        
+                        if not edge_cost_info['passable'] and not is_end_edge:
+                            continue
+                        
+                        cost_multiplier = 3.0 if (is_end_edge and not edge_cost_info['passable']) else 1.0
+                        tentative_g = backward_g_costs[current_node] + (edge_cost_info['total_cost'] * cost_multiplier)
+                        
+                        if neighbor not in backward_g_costs or tentative_g < backward_g_costs[neighbor]:
+                            backward_g_costs[neighbor] = tentative_g
+                            backward_parents[neighbor] = (current_node, current_path + [neighbor])
+                            
+                            h_cost = self.calculate_heuristic(neighbor, start_node)
+                            f_cost = tentative_g + h_cost
+                            
+                            new_path = current_path + [neighbor]
+                            heapq.heappush(backward_open, (f_cost, neighbor, new_path))
         
-        print(f"  ❌ Rota bulunamadı ({iteration} iterasyon)")
-        print(f"  DEBUG: Toplam {len(visited_nodes)} farklı düğüm ziyaret edildi")
-        
-        # Eğer end_node'a gelen kenarlar varsa, onları ziyaret ettik mi?
-        if end_node in self.incoming_edges:
-            incoming_sources = {str(edge['from']) for edge in self.incoming_edges[end_node]}
-            visited_incoming = incoming_sources.intersection(visited_nodes)
-            print(f"  DEBUG: end_node'a gelen {len(incoming_sources)} kaynaktan {len(visited_incoming)} tanesini ziyaret ettik")
-            if len(visited_incoming) == 0:
-                print(f"  ⚠️ SORUN: Hedefe giden hiçbir düğüme ulaşamadık! Yol ağı bağlantısız.")
+        print(f"\n  ❌ Rota bulunamadı ({iteration} iterasyon)")
+        print(f"     İleri yön: {forward_iterations} adım, {len(forward_closed)} closed")
+        print(f"     Geri yön: {backward_iterations} adım, {len(backward_closed)} closed")
         
         return None
+
+
+    def _merge_bidirectional_paths(self, meeting_point, forward_parents, backward_parents):
+        """Çift yönlü aramada buluşma noktasında yolları birleştir"""
         
+        _, forward_path = forward_parents.get(meeting_point, (None, []))
+        _, backward_path = backward_parents.get(meeting_point, (None, []))
         
+        backward_path_reversed = list(reversed(backward_path))
+        
+        if forward_path and backward_path_reversed:
+            full_path = forward_path + backward_path_reversed[1:]
+        else:
+            full_path = forward_path or backward_path_reversed
+        
+        print(f"     İleri yol: {len(forward_path)} düğüm")
+        print(f"     Geri yol: {len(backward_path_reversed)} düğüm")
+        print(f"     Toplam: {len(full_path)} düğüm")
+        
+        return full_path        
     def calculate_heuristic(self, from_node_id, to_node_id):
         """A* için heuristik"""
         from_node = self.nodes.get(str(from_node_id), {})
