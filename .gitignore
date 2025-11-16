@@ -159,6 +159,15 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+#route file
+src/output/*.json
+
+#route visualization
+src/output/*.html
+
+#route stats
+src/output/*.png
+
 # Pyre type checker
 .pyre/
 
