@@ -895,8 +895,11 @@ class EnhancedRoutingEngine:
         for i in range(0, len(route_path), step):
             node_id = str(route_path[i])
             node_data = self.nodes.get(node_id, {})
-            lat = node_data.get('lat', 0)
-            lon = node_data.get('lon', 0)
+            
+            gps = node_data.get('gps', [])            
+            lat = gps[0] if len(gps) >= 2 else 0      
+            lon = gps[1] if len(gps) >= 2 else 0
+            
             if lat and lon:
                 waypoints.append(f"{lat},{lon}")
         
