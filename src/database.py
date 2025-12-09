@@ -498,9 +498,15 @@ OPTIMIZATION_PROFILES = {
 # YENİ: BEYKOZ BÖLGE BİLGİLERİ
 # ============================================
 BEYKOZ_REGION = {
-    'bbox': (41.10, 29.05, 41.15, 29.15),  # (min_lat, min_lon, max_lat, max_lon)
+    # Yeni (Anadolu Hisarı'nı da kapsar):
+    'bbox': (41.0750, 29.0300, 41.1600, 29.1700), # (min_lat, min_lon, max_lat, max_lon)
     'center': (41.1125, 29.10),
     'known_locations': {
+        'Anadolu Hisari': {
+        'name': 'Anadolu Hisarı',
+        'gps': (41.0840924, 29.0683684),  # Geocoder'ın bulduğu koordinat
+        'description': 'Anadolu Hisarı'
+        },
         'Beykoz_Sosyal_Tesisleri': {
             'gps': (41.1133, 29.0877),
             'elevation': 5,  # metre (sahil seviyesi)

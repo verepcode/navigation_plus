@@ -97,7 +97,7 @@ class RoadNetworkManager:
     
     def _download_osm_data(self, bbox):
         """
-        Overpass API kullanarak OSM verisi indir
+        Overpass API kullanarak OSM verisi indir - GENİŞLETİLMİŞ
         
         Args:
             bbox (tuple): (min_lat, min_lon, max_lat, max_lon)
@@ -108,31 +108,45 @@ class RoadNetworkManager:
         min_lat, min_lon, max_lat, max_lon = bbox
         self.bbox = bbox
         
-        # Overpass API sorgusu
         overpass_url = "http://overpass-api.de/api/interpreter"
         
-        # Sorgu: Sadece araç yolları (highway), yaya/bisiklet yolları hariç
+        # GENİŞLETİLMİŞ SORGU
+        # Dahil edilen yol türleri:
+        # - motorway, trunk, primary, secondary, tertiary (ana yollar)
+        # - residential (mahalle içi yollar) 
+        # - unclassified (sınıflandırılmamış ama araç geçen yollar)
+        # - living_street (yaşam sokakları - araç girebilir)
+        # - service (servis yolları - opsiyonel, çok fazla veri ekler)
+        #
+        # Hariç tutulan:
+        # - footway, path, cycleway, pedestrian, steps (yaya/bisiklet)
+        # - track (tarla/orman yolları)
+        # - construction (yapım aşamasında)
+        # - proposed (planlanan)
+        
         overpass_query = f"""
-        [out:json][timeout:90];
+        [out:json][timeout:120];
         (
-          way["highway"]["highway"!="footway"]["highway"!="path"]
-              ["highway"!="cycleway"]["highway"!="pedestrian"]
-              ["highway"!="steps"]["highway"!="track"]
-              ({min_lat},{min_lon},{max_lat},{max_lon});
+        way["highway"~"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|residential|unclassified|living_street)$"]
+            ({min_lat},{min_lon},{max_lat},{max_lon});
         );
         out body;
         >;
         out skel qt;
         """
         
+        # ALTERNATİF: Service yolları da dahil etmek istersen (çok daha fazla veri):
+        # "highway"~"^(motorway|...|living_street|service)$"
+        
         try:
             print(f"   Bölge: {bbox}")
             print("   API'ye bağlanılıyor...")
+            print("   ℹ️ Genişletilmiş yol ağı sorgulanıyor...")
             
             response = requests.post(
                 overpass_url,
                 data={'data': overpass_query},
-                timeout=120
+                timeout=180  # Timeout artırıldı
             )
             
             if response.status_code == 200:
@@ -145,6 +159,16 @@ class RoadNetworkManager:
                 print(f"   ✓ Başarılı!")
                 print(f"   ✓ {nodes_count} düğüm, {ways_count} yol indirildi")
                 
+                # Yol türlerini say
+                highway_types = {}
+                for e in data['elements']:
+                    if e['type'] == 'way' and 'tags' in e:
+                        hw_type = e['tags'].get('highway', 'unknown')
+                        highway_types[hw_type] = highway_types.get(hw_type, 0) + 1
+                
+                print(f"\n📊 YOL TÜRLERİ:")
+                for hw_type, count in sorted(highway_types.items(), key=lambda x: -x[1]):
+                    print(f"   {hw_type}: {count}")
                 return data
             else:
                 print(f"   ❌ HTTP Hatası: {response.status_code}")
@@ -273,8 +297,7 @@ class RoadNetworkManager:
             # GPS koordinatlarını topla
             locations = [node_data['gps'] for node_id, node_data in batch]
             locations_str = '|'.join([f"{lat},{lon}" for lat, lon in locations])
-            for lat, lon in locations:
-                print(f"{lat},{lon}")
+            
             
             # API isteği
             url = f"https://maps.googleapis.com/maps/api/elevation/json"
@@ -294,7 +317,7 @@ class RoadNetworkManager:
                         print(f"Received elevation")
                         # Sonuçları düğümlere ekle
                         for idx, (node_id, node_data) in enumerate(batch):
-                            print(f"elevation_from api: {results[idx]['elevation']}")
+                            # print(f"elevation_from api: {results[idx]['elevation']}")
                             if idx < len(results):
                                 
                                 self.nodes[node_id]['elevation'] = results[idx]['elevation']

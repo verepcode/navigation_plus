@@ -114,7 +114,7 @@ class SmartGeocoder:
             return None
         
         target_lat, target_lon = coords['lat'], coords['lon']
-        
+        print(f"hedef lat: {target_lat}, hedef lon: {target_lon} ")
         # En yakın node'u bul (basit Euclidean mesafe)
         min_distance = float('inf')
         closest_node = None
@@ -175,6 +175,20 @@ class EnhancedRoutingEngine:
         print(f"  • {len(self.nodes)} düğüm")
         print(f"  • {len(self.edges)} kenar")
         print(f"  • Geocoder aktif (Nominatim)")
+        
+        # Network kapsama alanı - DEBUG
+        all_lats = []
+        all_lons = []
+        for node_data in self.nodes.values():
+            gps = node_data.get('gps', [])
+            if len(gps) >= 2:
+                all_lats.append(gps[0])
+                all_lons.append(gps[1])
+        
+        if all_lats and all_lons:
+            print(f"\n📍 Network Kapsama Alanı:")
+            print(f"  LAT: {min(all_lats):.6f} - {max(all_lats):.6f}")
+            print(f"  LON: {min(all_lons):.6f} - {max(all_lons):.6f}")
     
     
     def _build_edge_index(self):
@@ -342,8 +356,9 @@ class EnhancedRoutingEngine:
         # print(f"  • Maksimum: %{vehicle_capability['maximum_slope']}")
         
         # En yakın düğümleri bul
-        start_node = self.find_closest_node(*start_gps)
-        end_node = self.find_closest_node(*end_gps)
+        threshold_distance = 50
+        start_node = self.find_closest_node(*start_gps, threshold_distance)
+        end_node = self.find_closest_node(*end_gps, threshold_distance)
         
         if not start_node:
             print(f"❌ Başlangıç noktası bulunamadı: {start_gps}")
@@ -407,13 +422,14 @@ class EnhancedRoutingEngine:
         return route_details
     
     
-    def find_closest_node(self, lat, lon):
+    def find_closest_node(self, lat, lon, threshold_distance):
         """En yakın ve EN BAĞLANTILI yol düğümünü bul"""
         if not lat or not lon:
             print(f"⚠️ Geçersiz koordinat: {lat}, {lon}")
             return None
         
         candidates = []
+        min_distance_found = float('inf')  # En yakın mesafeyi takip et
         
         for node_id, node_data in self.nodes.items():
             gps = node_data.get('gps', [0, 0])
@@ -423,9 +439,13 @@ class EnhancedRoutingEngine:
                 continue
             
             distance = self.haversine_distance(lat, lon, node_lat, node_lon)
-            
-            # 1 km içindeki düğümleri değerlendir
-            if distance < 200:
+            # print(f"haversine_distance: {distance}")
+            # threshold_distance içindeki düğümleri değerlendir
+
+            if distance < min_distance_found:
+                min_distance_found = distance
+
+            if distance < threshold_distance:
                 # Bağlantı skoru: outgoing + incoming kenar sayısı
                 outgoing_count = len(self.outgoing_edges.get(str(node_id), []))
                 incoming_count = len(self.incoming_edges.get(str(node_id), []))
@@ -440,7 +460,9 @@ class EnhancedRoutingEngine:
                 })
         
         if not candidates:
-            print(f"⚠️ 1km içinde düğüm bulunamadı!")
+            print(f"⚠️ {threshold_distance}m içinde düğüm bulunamadı!")
+            print(f"   Hedef: ({lat}, {lon})")
+            print(f"   En yakın node {min_distance_found:.0f}m uzakta")
             return None
         
         # SKOR HESAPLAMA: Mesafe + Bağlantı

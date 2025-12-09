@@ -72,9 +72,6 @@ class EnhancedNavigationSystem:
         Returns:
             bool: Başarılı ise True
         """
-        print(f"\n{'='*80}")
-        print(f"📍 BÖLGE HAZIRLANIYOR: {region_name.upper()}")
-        print(f"{'='*80}\n")
         
         # Varsayılan bbox
         if bbox is None:
@@ -165,7 +162,7 @@ class EnhancedNavigationSystem:
         # Lokasyonları GPS'e çevir
         start_gps = self._resolve_location(start_location)
         end_gps = self._resolve_location(end_location)
-        
+        print(f"start_gps and end_gps: {start_gps} and {end_gps}")
         if not start_gps or not end_gps:
             print("❌ Lokasyon bulunamadı!")
             return None
@@ -306,20 +303,33 @@ class EnhancedNavigationSystem:
         Lokasyon adını GPS koordinatına çevir
         
         Args:
-            location: GPS tuple veya lokasyon adı
+            location: GPS tuple, lokasyon adı veya adres string'i
             
         Returns:
             tuple: (lat, lon) veya None
         """
-        # Zaten GPS tuple ise
+        # 1. Zaten GPS tuple ise
         if isinstance(location, (tuple, list)) and len(location) == 2:
             return tuple(location)
         
-        # Lokasyon adı ise
+        # 2. String ise
         if isinstance(location, str):
+            # 2a. Önce known_locations'da ara
             known_locations = BEYKOZ_REGION.get('known_locations', {})
             if location in known_locations:
+                print(f"  ✓ Bilinen lokasyon: {location}")
                 return known_locations[location]['gps']
+            
+            # 2b. known_locations'da yoksa Geocoder ile ara
+            if self.router and hasattr(self.router, 'geocoder'):
+                print(f"  🔍 Geocoder ile aranıyor: {location}")
+                coords = self.router.geocoder.geocode(location)
+                if coords:
+                    return (coords['lat'], coords['lon'])
+                else:
+                    print(f"  ❌ Geocoder bulamadı: {location}")
+            else:
+                print(f"  ⚠️ Geocoder hazır değil!")
         
         return None
     
@@ -342,7 +352,7 @@ class EnhancedNavigationSystem:
             return
         
         # 2. Test lokasyonları
-        start = "Beykoz_Sosyal_Tesisleri"
+        start = "Anadolu Hisarı"
         end = "Karagoz_Sirti_Camii"
         
         print(f"\n📍 ROTA:")
@@ -473,10 +483,6 @@ def main():
     """
     Ana program
     """
-    print("\n" + "="*80)
-    print(" "*15 + "🗺️ GELİŞTİRİLMİŞ NAVİGASYON SİSTEMİ")
-    print(" "*10 + "Eğim Optimizasyonlu • Araç Gücü Analizi • Google Maps")
-    print("="*80)
     
     # Sistemi başlat
     system = EnhancedNavigationSystem()
@@ -505,7 +511,7 @@ def main():
             print("\n📍 Beykoz bölgesi yükleniyor...")
             system.initialize_region('beykoz', add_elevation=True)
             
-            start = "Beykoz_Sosyal_Tesisleri"
+            start = "Anadolu Hisarı, Beykoz, İstanbul"
             end = "Karagoz_Sirti_Camii"
             
             print("\nAraç seçin:")
